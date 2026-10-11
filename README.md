@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SocialFlow
 
-## Getting Started
+Eén post klaarzetten → AI schrijft de captions → publiceren naar **Instagram, TikTok, Facebook en YouTube** (feed, Reel/Short én story), voor **meerdere accounts/merken** die elk hun eigen koppelingen hebben.
 
-First, run the development server:
+Gebouwd voor Moore Multimedia. Live op [socialflow-amber.vercel.app](https://socialflow-amber.vercel.app).
+
+## Features
+
+- **Eén post → alle kanalen** — foto's en video's naar feed, Reel/Short en story
+- **AI-captions per platform** — Claude Opus 4.8 schrijft een eigen tekst + hashtags per kanaal (YouTube krijgt ook een titel)
+- **Meerdere accounts** — elk merk/klant een eigen Account met eigen koppelingen
+- **OAuth-koppelingen** — Meta (Facebook + Instagram), Instagram Login, TikTok, YouTube
+- **Inplannen** — server-side scheduler via cron (+ dry-run/testmodus die de koppeling checkt zonder te posten)
+- **Pagina-kiezer per account** — kies met welke Facebook-pagina/Instagram een account post
+
+## Tech
+
+- Next.js 16 (App Router) · React 19 · Tailwind CSS v4 · TypeScript
+- Opslag: Upstash Redis (tokens/accounts) + Vercel Blob (media), met lokale `.data/`-fallback
+- AI: Anthropic Claude API
+- Hosting: Vercel
+
+## Lokaal draaien
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev      # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Maak een `.env.local` (zie hieronder). Zonder sleutels valt de app terug op lokale opslag en een ingebouwde caption-generator.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Omgevingsvariabelen
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Deze staan in `.env.local` (lokaal, **gitignored**) en op Vercel — nooit in de repo:
 
-## Learn More
+| Variabele | Waarvoor |
+|---|---|
+| `ANTHROPIC_API_KEY` | AI-captions (Claude) |
+| `APP_URL` | Basis-URL voor OAuth-redirects |
+| `META_APP_ID` / `META_APP_SECRET` / `META_GRAPH_VERSION` | Facebook + Instagram |
+| `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` | Instagram Login (los) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | YouTube |
+| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` | TikTok |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Upstash Redis |
+| `BLOB_READ_WRITE_TOKEN` *of* `BLOB_STORE_ID` | Vercel Blob (media) |
+| `CRON_SECRET` | Beveiligt het cron-endpoint |
 
-To learn more about Next.js, take a look at the following resources:
+## Deployen
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npx vercel --prod
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+De cron (`vercel.json`) draait op Vercel Hobby max 1×/dag; voor exacte tijden roept een externe pinger (bv. cron-job.org) `/api/cron/publish?secret=$CRON_SECRET` elke minuut aan.

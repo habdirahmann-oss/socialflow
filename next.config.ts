@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Sta verzoeken via de Cloudflare-tunnel toe tijdens development
+  allowedDevOrigins: ["*.trycloudflare.com"],
 };
 
 export default nextConfig;
