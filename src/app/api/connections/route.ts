@@ -3,11 +3,14 @@ import { clearMetaStore, setSelectedPage } from "@/lib/meta";
 import { clearIgConnection } from "@/lib/instagram";
 import { clearTikTokConnection } from "@/lib/tiktok";
 import { clearYouTubeConnection } from "@/lib/youtube";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 /** Ontkoppel een koppeling van één account. type=meta | ig | tiktok | youtube. */
 export async function DELETE(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const url = new URL(req.url);
   const accountId = url.searchParams.get("account");
   const type = url.searchParams.get("type") || "meta";
@@ -23,6 +26,8 @@ export async function DELETE(req: Request) {
 
 /** Kies met welke Facebook-pagina (en bijbehorend Instagram) dit account post. */
 export async function PATCH(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const { accountId, pageId } = await req.json().catch(() => ({}));
   if (!accountId || !pageId) {
     return NextResponse.json(

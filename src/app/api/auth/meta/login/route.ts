@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { metaConfigured, metaLoginUrl, META } from "@/lib/meta";
 import { accountExists } from "@/lib/accounts";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   if (!metaConfigured()) {
     return NextResponse.json(
       { error: "Meta is niet geconfigureerd (META_APP_ID / META_APP_SECRET)" },

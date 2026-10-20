@@ -8,6 +8,7 @@ import {
 } from "@/lib/schedule";
 import { resolveMediaUrl } from "@/lib/publish";
 import { accountExists } from "@/lib/accounts";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -21,7 +22,9 @@ interface ScheduleBody {
   captions: ScheduledPost["captions"];
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const posts = await listScheduled();
   // stuur geen zware velden mee die de UI niet nodig heeft
   const slim = posts.map((p) => ({
@@ -38,6 +41,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   let body: ScheduleBody;
   try {
     body = await req.json();
@@ -82,6 +87,8 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id ontbreekt" }, { status: 400 });
   await removeScheduled(id);

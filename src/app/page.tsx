@@ -9,6 +9,7 @@ import {
   type PlacementId,
 } from "@/lib/platforms";
 import type { CaptionResult, PlatformCaption } from "./api/captions/route";
+import LogoutLink from "@/components/LogoutLink";
 
 /* ---------------- Types ---------------- */
 
@@ -948,6 +949,7 @@ function Header({ connected }: { connected: number }) {
           <span className="hidden rounded-full border border-border px-3 py-1 text-xs text-muted sm:block">
             {connected} actief
           </span>
+          <LogoutLink className="ml-1" />
         </div>
       </div>
     </header>

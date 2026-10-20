@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { tiktokConfigured, tiktokLoginUrl, TIKTOK } from "@/lib/tiktok";
 import { accountExists } from "@/lib/accounts";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   if (!tiktokConfigured()) {
     return NextResponse.json(
       { error: "TikTok is niet geconfigureerd (TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET)" },

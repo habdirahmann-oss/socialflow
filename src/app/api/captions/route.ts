@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,8 @@ export type CaptionResult = Record<string, PlatformCaption>;
 const MODEL = "claude-opus-4-8";
 
 export async function POST(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   let body: CaptionRequest;
   try {
     body = await req.json();

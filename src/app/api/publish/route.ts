@@ -5,6 +5,7 @@ import {
   type PublishTargets,
   type PublishCaptions,
 } from "@/lib/publish";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // video's kunnen even duren om te verwerken
@@ -18,6 +19,8 @@ interface PublishBody {
 }
 
 export async function POST(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   let body: PublishBody;
   try {
     body = await req.json();

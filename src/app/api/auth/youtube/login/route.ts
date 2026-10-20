@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { youtubeConfigured, youtubeLoginUrl, YT } from "@/lib/youtube";
 import { accountExists } from "@/lib/accounts";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   if (!youtubeConfigured()) {
     return NextResponse.json(
       { error: "YouTube is niet geconfigureerd (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)" },

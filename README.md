@@ -43,7 +43,8 @@ Deze staan in `.env.local` (lokaal, **gitignored**) en op Vercel — nooit in de
 | `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` | TikTok |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Upstash Redis |
 | `BLOB_READ_WRITE_TOKEN` *of* `BLOB_STORE_ID` | Vercel Blob (media) |
-| `CRON_SECRET` | Beveiligt het cron-endpoint |
+| `CRON_SECRET` | Beveiligt het cron-endpoint (verplicht) |
+| `APP_PASSWORD` | Wachtwoord voor de app (leeg = geen inlog) |
 
 ## Deployen
 
@@ -51,4 +52,19 @@ Deze staan in `.env.local` (lokaal, **gitignored**) en op Vercel — nooit in de
 npx vercel --prod
 ```
 
-De cron (`vercel.json`) draait op Vercel Hobby max 1×/dag; voor exacte tijden roept een externe pinger (bv. cron-job.org) `/api/cron/publish?secret=$CRON_SECRET` elke minuut aan.
+De cron (`vercel.json`) draait op Vercel Hobby max 1×/dag; voor exacte tijden roept een externe pinger (bv. cron-job.org) `/api/cron/publish` elke minuut aan met de header `Authorization: Bearer <CRON_SECRET>`:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<jouw-domein>/api/cron/publish
+```
+
+Zonder `CRON_SECRET` weigert het endpoint alles (503).
+
+## Toegang (wachtwoord)
+
+Zet `APP_PASSWORD` in Vercel om de app af te schermen. Je logt één keer per apparaat in
+(cookie geldig voor 1 jaar). Geen gebruikersnamen, geen captcha. Wijzig je het wachtwoord,
+dan moet iedereen opnieuw inloggen. Zonder `APP_PASSWORD` staat de poort uit.
+
+Publiek blijven: `/login`, `/privacy`, `/voorwaarden`, de OAuth-callbacks, `/api/cron/*`
+(eigen secret) en `/api/media/*`.

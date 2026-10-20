@@ -26,11 +26,14 @@ import {
   clearYouTubeConnection,
   youtubeConfigured,
 } from "@/lib/youtube";
+import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 /** Lijst met accounts, elk verrijkt met hun koppelingsstatus. */
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const accounts = await listAccounts();
   const enriched = await Promise.all(
     accounts.map(async (a) => {
@@ -67,12 +70,16 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const { name } = await req.json().catch(() => ({ name: "" }));
   const account = await createAccount(name || "");
   return NextResponse.json(account);
 }
 
 export async function PATCH(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const { id, name } = await req.json().catch(() => ({}));
   if (!id) return NextResponse.json({ error: "id ontbreekt" }, { status: 400 });
   await renameAccount(id, name || "");
@@ -80,6 +87,8 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id ontbreekt" }, { status: 400 });
   await clearMetaStore(id); // tokens opruimen

@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense, useCallback } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PLATFORM_MAP } from "@/lib/platforms";
+import LogoutLink from "@/components/LogoutLink";
 
 interface AccountState {
   id: string;
@@ -119,12 +120,15 @@ function Inner() {
               <p className="text-[11px] text-muted">verbindingen</p>
             </div>
           </Link>
-          <Link
-            href="/"
-            className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
-          >
-            ← Terug naar composer
-          </Link>
+          <div className="flex items-center gap-3">
+            <LogoutLink />
+            <Link
+              href="/"
+              className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
+            >
+              ← Terug naar composer
+            </Link>
+          </div>
         </div>
       </header>
 
