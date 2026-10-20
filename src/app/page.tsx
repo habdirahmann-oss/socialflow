@@ -10,6 +10,7 @@ import {
 } from "@/lib/platforms";
 import type { CaptionResult, PlatformCaption } from "./api/captions/route";
 import LogoutLink from "@/components/LogoutLink";
+import type { PostView } from "@/lib/post-view";
 import { channelBlockReason } from "@/lib/targets";
 import { postJson } from "@/lib/client-fetch";
 import {
@@ -38,20 +39,6 @@ interface MediaItem {
   error: string | null;
 }
 
-interface ScheduledPost {
-  id: string;
-  subject: string;
-  platforms: PlatformId[];
-  placements: Record<string, PlacementId[]>;
-  captions: CaptionResult;
-  thumb?: string;
-  thumbType?: "image" | "video";
-  when: string; // ISO of "now"
-  status: "gepland" | "gepost";
-}
-
-const STORE_KEY = "socialflow.posts.v1";
-
 interface AccountInfo {
   id: string;
   name: string;
@@ -63,22 +50,19 @@ interface AccountInfo {
   youtube: { channelTitle: string } | null;
 }
 
-interface ServerPost {
-  id: string;
-  accountName: string;
-  scheduledFor: number;
-  thumb?: string;
-  mediaType?: "image" | "video";
-  mediaUrl?: string;
-  subject: string;
-  targets: Record<string, string[]>;
-  status: "pending" | "processing" | "posted" | "partial" | "failed";
-  results?: { platform: string; placement: string; ok: boolean; error?: string }[];
-  attempts?: number;
-  nextAttemptAt?: number;
-  lastError?: string;
-  dryRun?: boolean;
+/** Laatste geschiedenis-tijdstip: direct = aangemaakt, gepland = laatst bijgewerkt. */
+function historyTime(p: PostView): number {
+  if (p.source === "direct") return p.createdAt ?? p.scheduledFor;
+  return p.updatedAt ?? p.scheduledFor;
 }
+
+const STATUS_NL: Record<PostView["status"], { label: string; cls: string }> = {
+  pending: { label: "gepland", cls: "bg-brand/15 text-brand" },
+  processing: { label: "bezig", cls: "bg-sky-500/15 text-sky-300" },
+  posted: { label: "gepost", cls: "bg-accent/15 text-accent" },
+  partial: { label: "gedeeltelijk", cls: "bg-amber-500/15 text-amber-400" },
+  failed: { label: "mislukt", cls: "bg-red-500/15 text-red-400" },
+};
 
 /** Huidige lokale tijd in het formaat van <input type="datetime-local">. */
 function localDateTimeMin(): string {
@@ -110,22 +94,16 @@ export default function Page() {
   const [source, setSource] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<"now" | "later">("now");
   const [scheduleAt, setScheduleAt] = useState("");
-  const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [activePreview, setActivePreview] = useState<PlatformId>("instagram");
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [accountId, setAccountId] = useState<string>("");
   const [publishing, setPublishing] = useState(false);
   const [dryRun, setDryRun] = useState(false);
-  const [serverPosts, setServerPosts] = useState<ServerPost[]>([]);
-
-  /* load saved posts */
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (raw) setPosts(JSON.parse(raw));
-    } catch {}
-  }, []);
+  const [upcoming, setUpcoming] = useState<PostView[]>([]);
+  const [recent, setRecent] = useState<PostView[]>([]);
+  const [overviewKey, setOverviewKey] = useState(0);
+  const reloadOverview = () => setOverviewKey((k) => k + 1);
 
   /* load accounts + connectiestatus */
   useEffect(() => {
@@ -138,30 +116,38 @@ export default function Page() {
       .catch(() => {});
   }, []);
 
-  /* load server-side geplande posts */
-  const loadSchedule = () => {
-    postJson<{ posts?: ServerPost[] }>("/api/schedule", undefined, "GET")
-      .then((d) => setServerPosts(d.posts || []))
-      .catch(() => {});
-  };
+  /* overzicht voor het GEKOZEN account: volgende 5 geplande + laatste 5 uit de geschiedenis */
   useEffect(() => {
-    loadSchedule();
-  }, []);
-
-  const persist = (next: ScheduledPost[]) => {
-    setPosts(next);
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(next));
-    } catch {
-      // quota — bewaar zonder thumbnails
-      try {
-        localStorage.setItem(
-          STORE_KEY,
-          JSON.stringify(next.map((p) => ({ ...p, thumb: undefined }))),
+    if (!accountId) return;
+    let cancelled = false;
+    const q = `accountId=${encodeURIComponent(accountId)}`;
+    Promise.all([
+      postJson<{ posts?: PostView[] }>(`/api/schedule?${q}`, undefined, "GET"),
+      postJson<{ entries?: PostView[] }>(`/api/history?${q}`, undefined, "GET"),
+    ])
+      .then(([s, h]) => {
+        if (cancelled) return;
+        const posts = s.posts || [];
+        setUpcoming(
+          posts
+            .filter((p) => p.status === "pending" || p.status === "processing")
+            .sort((a, b) => a.scheduledFor - b.scheduledFor)
+            .slice(0, 5),
         );
-      } catch {}
-    }
-  };
+        setRecent(
+          [
+            ...posts.filter((p) => p.status !== "pending" && p.status !== "processing"),
+            ...(h.entries || []),
+          ]
+            .sort((a, b) => historyTime(b) - historyTime(a))
+            .slice(0, 5),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, overviewKey]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -352,7 +338,6 @@ export default function Page() {
     tiktok: Boolean(currentAccount?.tiktok),
     youtube: Boolean(currentAccount?.youtube),
   };
-  const metaConnected = conn.facebook || conn.instagram;
   const anyConnected =
     conn.facebook || conn.instagram || conn.tiktok || conn.youtube;
   // van de gekozen kanalen: welke zijn daadwerkelijk verbonden?
@@ -433,7 +418,7 @@ export default function Page() {
           showToast(
             `Ingepland voor ${when} — wordt binnen ~5 minuten na dat tijdstip geplaatst`,
           );
-          loadSchedule();
+          reloadOverview();
         } else {
           showToast(data.error || "Inplannen mislukt");
         }
@@ -450,7 +435,6 @@ export default function Page() {
     /* ---------- Nu posten (echt of testmodus) ---------- */
     setPublishing(true);
     let msg = "";
-    let posted = false;
     try {
       const data = await postJson<{
         results?: { ok: boolean; error?: string; platform?: string }[];
@@ -461,6 +445,7 @@ export default function Page() {
         media: mediaPayload(),
         targets: buildTargets(),
         captions: buildCaptions(),
+        subject,
         dryRun,
       });
       const results: { ok: boolean; error?: string; platform?: string }[] =
@@ -473,7 +458,6 @@ export default function Page() {
         msg = `🧪 Testmodus: ${okCount} klaar om te posten`;
         if (failed.length) msg += ` · ${failed.length} nog niet gekoppeld`;
       } else {
-        posted = okCount > 0;
         if (okCount > 0) msg = `✓ Echt gepost (${okCount}×)`;
         if (failed.length)
           msg +=
@@ -491,29 +475,17 @@ export default function Page() {
       setPublishing(false);
     }
 
-    // log alleen echte posts in de lokale geschiedenis
-    if (posted) {
-      const post: ScheduledPost = {
-        id: `${Date.now()}`,
-        subject: subject || "(zonder onderwerp)",
-        platforms: Array.from(selected),
-        placements,
-        captions,
-        thumb: media?.url ?? undefined,
-        thumbType: media?.type,
-        when: "now",
-        status: "gepost",
-      };
-      persist([post, ...posts]);
-    }
+    // Echte posts staan server-side in de geschiedenis (ook bij een time-out).
+    if (!dryRun) reloadOverview();
     showToast(msg);
   };
 
-  const cancelScheduled = async (id: string) => {
-    setServerPosts((s) => s.filter((p) => p.id !== id));
+  const cancelScheduled = async (p: PostView) => {
+    if (!window.confirm(`Geplande post annuleren?\n\n"${p.subject}"`)) return;
+    setUpcoming((s) => s.filter((x) => x.id !== p.id));
     try {
       await postJson(
-        `/api/schedule?id=${encodeURIComponent(id)}`,
+        `/api/schedule?id=${encodeURIComponent(p.id)}`,
         undefined,
         "DELETE",
       );
@@ -522,10 +494,8 @@ export default function Page() {
         `Annuleren mislukt: ${e instanceof Error ? e.message : "onbekende fout"}`,
       );
     }
-    loadSchedule();
+    reloadOverview();
   };
-
-  const deletePost = (id: string) => persist(posts.filter((p) => p.id !== id));
 
   const activeCaption = captions[activePreview];
 
@@ -952,189 +922,51 @@ export default function Page() {
               </>
             )}
 
-            {/* server-side ingeplande posts */}
-            {serverPosts.length > 0 && (
-              <Card title="Automatisch ingepland">
-                <div className="flex flex-col gap-2">
-                  {serverPosts
-                    .slice()
-                    .sort((a, b) => a.scheduledFor - b.scheduledFor)
-                    .map((p) => {
-                      const platforms = Object.entries(p.targets || {})
-                        .filter(([, v]) => (v as string[]).length > 0)
-                        .map(([k]) => k as PlatformId);
-                      const failed = (p.results || []).filter((r) => !r.ok);
-                      return (
-                        <div
-                          key={p.id}
-                          className="flex items-center gap-3 rounded-xl border border-border bg-surface-2/40 p-2.5"
-                        >
-                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-black">
-                            {p.mediaType === "video" &&
-                            /^https?:/.test(p.mediaUrl || "") ? (
-                              <video
-                                src={p.mediaUrl}
-                                className="h-full w-full object-cover"
-                                muted
-                                playsInline
-                                preload="metadata"
-                              />
-                            ) : p.thumb && p.mediaType !== "video" ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={p.thumb}
-                                alt=""
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center text-lg">
-                                🗓️
-                              </div>
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">
-                              {p.subject}
-                            </p>
-                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                              {platforms.map((pid) => (
-                                <PlatformBadge key={pid} id={pid} small />
-                              ))}
-                              <span className="ml-1 text-[11px] text-muted">
-                                {new Date(p.scheduledFor).toLocaleString(
-                                  "nl-NL",
-                                  {
-                                    day: "numeric",
-                                    month: "short",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  },
-                                )}
-                              </span>
-                            </div>
-                            {p.status !== "posted" &&
-                              (p.lastError || failed.length > 0) && (
-                                <p className="mt-1 truncate text-[11px] text-red-400">
-                                  {p.lastError || failed[0].error}
-                                  {p.status === "pending" &&
-                                    p.nextAttemptAt &&
-                                    ` — nieuwe poging rond ${new Date(
-                                      p.nextAttemptAt,
-                                    ).toLocaleTimeString("nl-NL", {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    })} (poging ${(p.attempts ?? 0) + 1}/3)`}
-                                </p>
-                              )}
-                          </div>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[11px] ${
-                              p.status === "posted"
-                                ? "bg-accent/15 text-accent"
-                                : p.status === "failed"
-                                  ? "bg-red-500/15 text-red-400"
-                                  : p.status === "partial"
-                                    ? "bg-amber-500/15 text-amber-400"
-                                    : "bg-brand/15 text-brand"
-                            }`}
-                          >
-                            {p.dryRun ? "🧪 " : ""}
-                            {p.status === "posted"
-                              ? "gepost"
-                              : p.status === "failed"
-                                ? "mislukt"
-                                : p.status === "partial"
-                                  ? "deels gepost"
-                                  : p.status === "processing"
-                                    ? "bezig…"
-                                    : (p.attempts ?? 0) > 0
-                                      ? "opnieuw gepland"
-                                      : "gepland"}
-                          </span>
-                          {p.status === "pending" && (
-                            <button
-                              onClick={() => cancelScheduled(p.id)}
-                              className="text-muted transition hover:text-red-400"
-                              title="Annuleren"
-                            >
-                              ✕
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
-              </Card>
-            )}
-
-            {/* scheduled posts */}
-            {posts.length > 0 && (
-              <Card title="Geplande & geposte content">
-                <div className="flex flex-col gap-2">
-                  {posts.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex items-center gap-3 rounded-xl border border-border bg-surface-2/40 p-2.5"
-                    >
-                      <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-black">
-                        {p.thumb ? (
-                          p.thumbType === "video" ? (
-                            <video
-                              src={p.thumb}
-                              className="h-full w-full object-cover"
-                              muted
-                            />
-                          ) : (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={p.thumb}
-                              alt=""
-                              className="h-full w-full object-cover"
-                            />
-                          )
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center text-lg">
-                            📝
-                          </div>
-                        )}
+            {/* overzicht van het gekozen account */}
+            {accountId && (
+              <Card title={`Planning · ${currentAccount?.name ?? "account"}`}>
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Volgende geplande posts
+                    </p>
+                    {upcoming.length === 0 ? (
+                      <p className="text-xs text-muted">Niets ingepland.</p>
+                    ) : (
+                      <div className="flex flex-col gap-1.5">
+                        {upcoming.map((p) => (
+                          <MiniPost
+                            key={p.id}
+                            post={p}
+                            time={p.scheduledFor}
+                            onCancel={
+                              p.status === "pending" ? () => cancelScheduled(p) : undefined
+                            }
+                          />
+                        ))}
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
-                          {p.subject}
-                        </p>
-                        <div className="mt-1 flex items-center gap-1.5">
-                          {p.platforms.map((pid) => (
-                            <PlatformBadge key={pid} id={pid} small />
-                          ))}
-                          <span className="ml-1 text-[11px] text-muted">
-                            {p.when === "now"
-                              ? "zojuist"
-                              : new Date(p.when).toLocaleString("nl-NL", {
-                                  day: "numeric",
-                                  month: "short",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })}
-                          </span>
-                        </div>
+                    )}
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Laatst geplaatst
+                    </p>
+                    {recent.length === 0 ? (
+                      <p className="text-xs text-muted">Nog niets geplaatst.</p>
+                    ) : (
+                      <div className="flex flex-col gap-1.5">
+                        {recent.map((p) => (
+                          <MiniPost key={`${p.source}-${p.id}`} post={p} time={historyTime(p)} />
+                        ))}
                       </div>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[11px] ${
-                          p.status === "gepost"
-                            ? "bg-accent/15 text-accent"
-                            : "bg-brand/15 text-brand"
-                        }`}
-                      >
-                        {p.status}
-                      </span>
-                      <button
-                        onClick={() => deletePost(p.id)}
-                        className="text-muted transition hover:text-red-400"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
+                    )}
+                  </div>
+                  <a
+                    href={`/planning?account=${encodeURIComponent(accountId)}`}
+                    className="text-xs text-brand underline-offset-2 hover:underline"
+                  >
+                    Alles bekijken in Planning →
+                  </a>
                 </div>
               </Card>
             )}
@@ -1153,6 +985,85 @@ export default function Page() {
 
 /* ---------------- Sub-components ---------------- */
 
+function MiniPost({
+  post: p,
+  time,
+  onCancel,
+}: {
+  post: PostView;
+  time: number;
+  onCancel?: () => void;
+}) {
+  const platforms = Object.entries(p.targets || {})
+    .filter(([, v]) => Array.isArray(v) && v.length > 0)
+    .map(([k]) => k as PlatformId)
+    .filter((k) => PLATFORM_MAP[k]);
+  const failed = (p.results || []).filter((r) => !r.ok);
+  const status = STATUS_NL[p.status] ?? STATUS_NL.pending;
+  const url = p.mediaUrl && /^(https?:|\/)/.test(p.mediaUrl) ? p.mediaUrl : undefined;
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-2/40 p-2">
+      <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md bg-black">
+        {p.mediaType === "video" && url ? (
+          <video
+            src={url}
+            className="h-full w-full object-cover"
+            muted
+            playsInline
+            preload="metadata"
+          />
+        ) : p.mediaType === "image" && (p.thumb || url) ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={p.thumb || url} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-sm">📝</div>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium">{p.subject}</p>
+        <div className="mt-0.5 flex items-center gap-1">
+          {platforms.map((pid) => (
+            <PlatformBadge key={pid} id={pid} small />
+          ))}
+          <span className="ml-1 text-[11px] text-muted">
+            {new Date(time).toLocaleString("nl-NL", {
+              day: "numeric",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        </div>
+        {p.status === "processing" && p.source === "direct" ? (
+          <p className="mt-0.5 truncate text-[11px] text-sky-300">
+            Bezig / onbekend — controleer het kanaal
+          </p>
+        ) : (
+          p.status !== "posted" &&
+          (p.lastError || failed.length > 0) && (
+            <p className="mt-0.5 truncate text-[11px] text-red-400">
+              {p.lastError || failed[0].error}
+            </p>
+          )
+        )}
+      </div>
+      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${status.cls}`}>
+        {p.dryRun ? "🧪 " : ""}
+        {status.label}
+      </span>
+      {onCancel && (
+        <button
+          onClick={onCancel}
+          className="text-muted transition hover:text-red-400"
+          title="Annuleren"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Header({ connected }: { connected: number }) {
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
@@ -1170,8 +1081,14 @@ function Header({ connected }: { connected: number }) {
             <PlatformBadge key={p.id} id={p.id} small />
           ))}
           <a
-            href="/verbindingen"
+            href="/planning"
             className="ml-2 rounded-full border border-border px-3 py-1 text-xs text-muted transition hover:text-foreground"
+          >
+            🗓️ Planning
+          </a>
+          <a
+            href="/verbindingen"
+            className="rounded-full border border-border px-3 py-1 text-xs text-muted transition hover:text-foreground"
           >
             🔗 Verbindingen
           </a>

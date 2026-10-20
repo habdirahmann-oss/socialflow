@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import { del } from "@vercel/blob";
 import {
   listScheduled,
   getScheduled,
   addScheduled,
-  removeScheduled,
+  removeScheduledPost,
+  patchScheduled,
   type ScheduledPost,
+  type ScheduledPatch,
 } from "@/lib/schedule";
+import { historyReferencesMedia } from "@/lib/history";
 import { resolveMediaInput, type MediaInput } from "@/lib/publish";
 import { normalizeTargets, countTargets } from "@/lib/targets";
 import { accountExists } from "@/lib/accounts";
 import { requireAuth } from "@/lib/auth";
+import { postView, parseStatusFilter, parseCaptions } from "@/lib/post-view";
 
 export const runtime = "nodejs";
 
@@ -30,27 +35,6 @@ interface ScheduleBody {
 const PLATFORMS = new Set(["facebook", "instagram", "tiktok", "youtube"]);
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Lichte versie voor de UI (geen captions/zware velden). */
-function slim(p: ScheduledPost) {
-  return {
-    id: p.id,
-    accountName: p.accountName,
-    scheduledFor: p.scheduledFor,
-    thumb: p.thumb,
-    mediaType: p.mediaType,
-    mediaUrl: p.mediaUrl,
-    subject: p.subject,
-    targets: p.targets,
-    status: p.status,
-    results: p.results,
-    attempts: p.attempts,
-    nextAttemptAt: p.nextAttemptAt,
-    lastError: p.lastError,
-    dryRun: p.dryRun,
-    updatedAt: p.updatedAt,
-  };
-}
 
 function bad(error: string) {
   return NextResponse.json({ error }, { status: 400 });
@@ -73,11 +57,18 @@ function parseTargets(t: unknown): ScheduledPost["targets"] | null {
   return count > 0 ? (out as ScheduledPost["targets"]) : null;
 }
 
+/** GET /api/schedule?accountId=&status=pending,processing */
 export async function GET(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
-  const posts = await listScheduled();
-  return NextResponse.json({ posts: posts.map(slim) });
+  const params = new URL(req.url).searchParams;
+  const accountId = params.get("accountId");
+  const statuses = parseStatusFilter(params.get("status"));
+  const posts = (await listScheduled())
+    .filter((p) => !accountId || p.accountId === accountId)
+    .filter((p) => !statuses || statuses.has(p.status))
+    .sort((a, b) => a.scheduledFor - b.scheduledFor);
+  return NextResponse.json({ posts: posts.map(postView) });
 }
 
 export async function POST(req: Request) {
@@ -100,7 +91,7 @@ export async function POST(req: Request) {
     id = body.id.toLowerCase();
     const existing = await getScheduled(id);
     if (existing) {
-      return NextResponse.json({ ok: true, id, existing: true, post: slim(existing) });
+      return NextResponse.json({ ok: true, id, existing: true, post: postView(existing) });
     }
   }
 
@@ -120,10 +111,7 @@ export async function POST(req: Request) {
   if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") {
     return bad("Ongeldige testmodus-waarde");
   }
-  const captions =
-    body.captions && typeof body.captions === "object" && !Array.isArray(body.captions)
-      ? (body.captions as ScheduledPost["captions"])
-      : {};
+  const captions = parseCaptions(body.captions) ?? {};
 
   let media: Awaited<ReturnType<typeof resolveMediaInput>>;
   try {
@@ -173,7 +161,7 @@ export async function POST(req: Request) {
       id: saved.id,
       ...(created ? {} : { existing: true }),
       ...(norm.dropped.length ? { dropped: norm.dropped } : {}),
-      post: slim(saved),
+      post: postView(saved),
     });
   } catch (e) {
     return NextResponse.json(
@@ -183,20 +171,140 @@ export async function POST(req: Request) {
   }
 }
 
+/** Tijdstip-validatie zoals bij inplannen: geldig getal, niet in het verleden. */
+function checkScheduledFor(v: unknown, now: number): string | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "Ongeldig tijdstip";
+  if (v < now - 60_000) return "Kies een tijdstip in de toekomst";
+  return null;
+}
+
+/**
+ * PATCH /api/schedule?id=  {scheduledFor?, captions?, targets?}
+ * Alleen zolang de post 'pending' is; bezig of afgerond → 409.
+ */
+export async function PATCH(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return bad("id ontbreekt");
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return bad("Ongeldige aanvraag");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return bad("Ongeldige aanvraag");
+  }
+
+  const now = Date.now();
+  const patch: ScheduledPatch = {};
+  if (body.scheduledFor !== undefined) {
+    const err = checkScheduledFor(body.scheduledFor, now);
+    if (err) return bad(err);
+    patch.scheduledFor = body.scheduledFor as number;
+  }
+  if (body.captions !== undefined) {
+    const captions = parseCaptions(body.captions);
+    if (!captions) return bad("Ongeldige captions");
+    patch.captions = captions;
+  }
+  if (body.targets !== undefined) {
+    const targets = parseTargets(body.targets);
+    if (!targets) return bad("Kies minstens één kanaal");
+    // Alleen plaatsingen die met de media van deze post kunnen.
+    const current = await getScheduled(id);
+    if (!current) return NextResponse.json({ error: "Post niet gevonden" }, { status: 404 });
+    const kind = current.mediaUrl
+      ? current.mediaType === "image"
+        ? "image"
+        : "video"
+      : undefined;
+    const norm = normalizeTargets(targets, kind);
+    if (countTargets(norm.targets) === 0) {
+      return bad("Niets om in te plannen met deze media");
+    }
+    patch.targets = norm.targets;
+  }
+  if (Object.keys(patch).length === 0) return bad("Niets om aan te passen");
+
+  try {
+    const res = await patchScheduled(id, patch, now);
+    if (res.kind === "notfound") {
+      return NextResponse.json({ error: "Post niet gevonden" }, { status: 404 });
+    }
+    if (res.kind === "conflict") {
+      return NextResponse.json(
+        {
+          error:
+            res.status === "processing"
+              ? "Deze post wordt nu geplaatst en kan niet meer worden aangepast"
+              : "Deze post is al afgerond en kan niet meer worden aangepast",
+          status: res.status,
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ ok: true, post: postView(res.post) });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Opslaan mislukt" },
+      { status: 503 },
+    );
+  }
+}
+
+const isBlobUrl = (u: string) => {
+  try {
+    const url = new URL(u);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".public.blob.vercel-storage.com")
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Ruimt het Blob-bestand van een verwijderde post op, maar alleen als geen
+ * andere ingeplande post of geschiedenis-entry het nog gebruikt.
+ * Fouten zijn niet fataal (het bestand blijft dan gewoon staan).
+ */
+async function cleanupMedia(mediaUrl: string | undefined): Promise<boolean> {
+  if (!mediaUrl || !isBlobUrl(mediaUrl)) return false;
+  try {
+    const stillUsed =
+      (await listScheduled()).some((p) => p.mediaUrl === mediaUrl) ||
+      (await historyReferencesMedia(mediaUrl));
+    if (stillUsed) return false;
+    await del(mediaUrl);
+    return true;
+  } catch (e) {
+    console.warn(
+      "[schedule] media opruimen mislukt:",
+      e instanceof Error ? e.message : "onbekend",
+    );
+    return false;
+  }
+}
+
 export async function DELETE(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return bad("id ontbreekt");
   try {
-    const res = await removeScheduled(id);
-    if (res === "processing") {
+    const { result, post } = await removeScheduledPost(id);
+    if (result === "processing") {
       return NextResponse.json(
         { error: "Deze post wordt nu geplaatst" },
         { status: 409 },
       );
     }
-    return NextResponse.json({ ok: true, removed: res === "removed" });
+    const mediaDeleted =
+      result === "removed" ? await cleanupMedia(post?.mediaUrl) : false;
+    return NextResponse.json({ ok: true, removed: result === "removed", mediaDeleted });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Verwijderen mislukt" },

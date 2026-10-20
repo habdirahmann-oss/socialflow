@@ -123,6 +123,12 @@ function Inner() {
           <div className="flex items-center gap-3">
             <LogoutLink />
             <Link
+              href="/planning"
+              className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
+            >
+              🗓️ Planning
+            </Link>
+            <Link
               href="/"
               className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
             >

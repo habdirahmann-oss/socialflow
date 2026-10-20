@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import {
   publishForAccount,
   resolveMediaInput,
   type MediaInput,
   type PublishTargets,
   type PublishCaptions,
+  type PublishOutcome,
 } from "@/lib/publish";
 import { requireAuth } from "@/lib/auth";
-import { accountExists } from "@/lib/accounts";
+import { listAccounts } from "@/lib/accounts";
+import { normalizeTargets } from "@/lib/targets";
+import { publishDirectWithHistory } from "@/lib/history";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // video's kunnen even duren (Hobby + Fluid Compute: max 300 s)
@@ -18,7 +22,22 @@ interface PublishBody {
   media?: MediaInput | null;
   targets?: unknown;
   captions?: unknown;
+  subject?: unknown;
   dryRun?: unknown;
+  /** Alleen lokaal testen (zie testHistoryAllowed): testmodus mét geschiedenis. */
+  testHistory?: unknown;
+}
+
+/**
+ * Testhaak: een dry-run die tóch een geschiedenis-entry schrijft, zodat het
+ * history-pad lokaal getest kan worden zonder echt te posten. Alleen buiten
+ * productie én met SOCIALFLOW_TEST_HISTORY=1.
+ */
+function testHistoryAllowed(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.SOCIALFLOW_TEST_HISTORY === "1"
+  );
 }
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
@@ -41,7 +60,8 @@ export async function POST(req: Request) {
   if (typeof body.accountId !== "string" || !body.accountId) {
     return bad("Kies eerst een account");
   }
-  if (!(await accountExists(body.accountId))) return bad("Onbekend account");
+  const account = (await listAccounts()).find((a) => a.id === body.accountId);
+  if (!account) return bad("Onbekend account");
   if (!isPlainObject(body.targets)) return bad("Kies minstens één kanaal");
   if (body.captions !== undefined && body.captions !== null && !isPlainObject(body.captions)) {
     return bad("Ongeldige captions");
@@ -58,15 +78,55 @@ export async function POST(req: Request) {
     );
   }
 
-  const out = await publishForAccount({
-    accountId: body.accountId,
-    mediaUrl: media?.url,
-    mediaType: media?.type,
-    targets: body.targets as PublishTargets,
-    captions: (body.captions ?? {}) as PublishCaptions,
-    dryRun,
-  });
+  const captions = (body.captions ?? {}) as PublishCaptions;
+  const requestedTargets = body.targets as PublishTargets;
 
-  if (out.error) return bad(out.error, { dropped: out.dropped, results: out.results });
-  return NextResponse.json(out);
+  // Testmodus schrijft geen geschiedenis (behalve met de lokale testhaak).
+  const record = !dryRun || (body.testHistory === true && testHistoryAllowed());
+
+  let out: PublishOutcome;
+  let historyId: string | undefined;
+  if (record) {
+    historyId = randomUUID();
+    try {
+      ({ out } = await publishDirectWithHistory({
+        id: historyId,
+        accountId: account.id,
+        accountName: account.name,
+        subject:
+          typeof body.subject === "string" && body.subject.trim()
+            ? body.subject.trim().slice(0, 500)
+            : "(zonder onderwerp)",
+        mediaUrl: media?.url,
+        mediaType: media?.type,
+        targets: normalizeTargets(requestedTargets, media?.type).targets,
+        requestedTargets,
+        captions,
+        dryRun,
+      }));
+    } catch (e) {
+      // De 'processing'-entry kon niet geschreven worden → niets gepubliceerd.
+      return NextResponse.json(
+        {
+          error: `Niet gepost: ${e instanceof Error ? e.message : "geschiedenis opslaan mislukt"}`,
+        },
+        { status: 503 },
+      );
+    }
+  } else {
+    out = await publishForAccount({
+      accountId: account.id,
+      mediaUrl: media?.url,
+      mediaType: media?.type,
+      targets: requestedTargets,
+      captions,
+      dryRun,
+    });
+  }
+
+  const extra = historyId ? { historyId } : {};
+  if (out.error) {
+    return bad(out.error, { dropped: out.dropped, results: out.results, ...extra });
+  }
+  return NextResponse.json({ ...out, ...extra });
 }
