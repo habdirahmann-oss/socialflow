@@ -1,5 +1,13 @@
-import { kvGet, kvSet } from "./store";
-import { fetchJson, downloadBuffer, MEDIA_TIMEOUT_MS } from "./http";
+import { kvGet, kvSet, kvUpdate, withLock } from "./store";
+import { fetchJson, downloadBuffer, MEDIA_TIMEOUT_MS, HttpError } from "./http";
+import {
+  REFRESH_LOCK,
+  errorText,
+  isTransientError,
+  toHealth,
+  type ChannelHealth,
+  type TokenHealthFields,
+} from "./token-status";
 
 /* ---------------- Config ---------------- */
 
@@ -108,9 +116,10 @@ export async function checkYouTube(accessToken: string, timeoutMs = 5000): Promi
 
 /* ---------------- Opslag per account ---------------- */
 
-export interface YouTubeConnection {
+export interface YouTubeConnection extends TokenHealthFields {
   accessToken: string;
   refreshToken: string;
+  /** Verloopmoment van het access-token (ms) — wordt automatisch ververst. */
   expiresAt: number;
   channelId: string;
   channelTitle: string;
@@ -124,39 +133,119 @@ export async function saveYouTubeConnection(
   accountId: string,
   conn: YouTubeConnection,
 ): Promise<void> {
-  const map = (await kvGet<YtStoreMap>(KEY)) ?? {};
-  map[accountId] = conn;
-  await kvSet(KEY, map);
+  await kvUpdate<YtStoreMap>(KEY, (cur) => ({ ...(cur ?? {}), [accountId]: conn }));
 }
 
+/** Leest de opgeslagen koppeling zónder te verversen (bv. in de OAuth-callback). */
+export async function peekYouTubeConnection(
+  accountId: string,
+): Promise<YouTubeConnection | null> {
+  const map = (await kvGet<YtStoreMap>(KEY)) ?? {};
+  return map[accountId] || null;
+}
+
+/** Zet de YouTube-koppeling van dit account op 'opnieuw verbinden nodig'. */
+export async function markYouTubeNeedsReauth(
+  accountId: string,
+  lastError: string,
+): Promise<void> {
+  await kvUpdate<YtStoreMap>(KEY, (cur) => {
+    const map = cur ?? {};
+    const c = map[accountId];
+    if (c) map[accountId] = { ...c, status: "needs_reauth", lastError, checkedAt: Date.now() };
+    return map;
+  });
+}
+
+const refreshDue = (c: YouTubeConnection, now: number) =>
+  c.status !== "needs_reauth" && now > c.expiresAt - 5 * 60_000;
+
+/**
+ * Laadt de koppeling en ververst het access-token als het (bijna) verlopen is,
+ * onder `lock:youtube-tokens`. Definitieve fout (invalid_grant, geen
+ * refresh-token) → status needs_reauth + lastError.
+ */
 export async function loadYouTubeConnection(
   accountId: string,
 ): Promise<YouTubeConnection | null> {
   const map = (await kvGet<YtStoreMap>(KEY)) ?? {};
   const conn = map[accountId] || null;
   if (!conn) return null;
-  if (Date.now() > conn.expiresAt - 5 * 60_000 && conn.refreshToken) {
-    try {
-      const t = await youtubeRefresh(conn.refreshToken);
-      const updated: YouTubeConnection = {
-        ...conn,
-        accessToken: t.access_token,
-        expiresAt: Date.now() + (t.expires_in || 3600) * 1000,
-      };
-      map[accountId] = updated;
-      await kvSet(KEY, map);
-      return updated;
-    } catch {
-      return conn;
+  if (!refreshDue(conn, Date.now())) return conn;
+  try {
+    return await withLock(
+      `lock:${KEY}`,
+      async () => {
+        const fresh = (await kvGet<YtStoreMap>(KEY)) ?? {};
+        const cur = fresh[accountId];
+        if (!cur) return null;
+        const now = Date.now();
+        if (!refreshDue(cur, now)) return cur; // al ververst door een ander
+        let updated: YouTubeConnection;
+        if (!cur.refreshToken) {
+          updated = {
+            ...cur,
+            checkedAt: now,
+            status: "needs_reauth",
+            lastError: "Geen refresh-token opgeslagen — opnieuw koppelen",
+          };
+        } else {
+          try {
+            const t = await youtubeRefresh(cur.refreshToken);
+            updated = {
+              ...cur,
+              accessToken: t.access_token,
+              // Google stuurt zelden een nieuw refresh-token; anders het oude houden
+              refreshToken: t.refresh_token || cur.refreshToken,
+              expiresAt: now + (t.expires_in || 3600) * 1000,
+              checkedAt: now,
+              status: "ok",
+            };
+            delete updated.lastError;
+          } catch (e) {
+            updated = isTransientError(e)
+              ? { ...cur, checkedAt: now, lastError: errorText(e) } // later opnieuw
+              : { ...cur, checkedAt: now, status: "needs_reauth", lastError: errorText(e) };
+          }
+        }
+        fresh[accountId] = updated;
+        await kvSet(KEY, fresh);
+        return updated;
+      },
+      REFRESH_LOCK,
+    );
+  } catch {
+    return conn; // opslag bezet: laat de post-poging de echte fout tonen
+  }
+}
+
+/** Lees-only controle (dagelijkse health-run). HTTP 401 → needs_reauth. */
+export async function checkYouTubeTokenHealth(accountId: string): Promise<void> {
+  const conn = await loadYouTubeConnection(accountId); // ververst indien nodig
+  if (!conn || conn.status === "needs_reauth") return;
+  try {
+    await checkYouTube(conn.accessToken, 5000);
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 401) {
+      await markYouTubeNeedsReauth(accountId, errorText(e));
     }
   }
-  return conn;
+}
+
+/** Gezondheid: refresh-tokens van Google verlopen niet vanzelf. */
+export function youtubeHealth(conn: YouTubeConnection, now = Date.now()): ChannelHealth {
+  return toHealth(
+    { status: conn.status, lastError: conn.lastError, connectedAt: conn.obtainedAt },
+    now,
+  );
 }
 
 export async function clearYouTubeConnection(accountId: string): Promise<void> {
-  const map = (await kvGet<YtStoreMap>(KEY)) ?? {};
-  delete map[accountId];
-  await kvSet(KEY, map);
+  await kvUpdate<YtStoreMap>(KEY, (cur) => {
+    const map = cur ?? {};
+    delete map[accountId];
+    return map;
+  });
 }
 
 /* ---------------- Short / video uploaden ---------------- */

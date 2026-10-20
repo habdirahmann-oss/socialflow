@@ -5,6 +5,7 @@ import {
   fetchPages,
   saveMetaStore,
   loadMetaStore,
+  checkMetaTokenHealth,
   META,
 } from "@/lib/meta";
 
@@ -42,8 +43,8 @@ export async function GET(req: Request) {
 
   try {
     const shortToken = await exchangeCodeForToken(code);
-    const longToken = await getLongLivedToken(shortToken);
-    const pages = await fetchPages(longToken);
+    const long = await getLongLivedToken(shortToken);
+    const pages = await fetchPages(long.token);
     // behoud de eerder gekozen pagina als die er nog is
     const prev = await loadMetaStore(accountId);
     const keep =
@@ -51,11 +52,15 @@ export async function GET(req: Request) {
         ? prev.selectedPageId
         : undefined;
     await saveMetaStore(accountId, {
-      userToken: longToken,
+      userToken: long.token,
+      userTokenExpiresAt: long.expiresAt,
       pages,
       obtainedAt: Date.now(),
       selectedPageId: keep,
+      status: "ok",
     });
+    // Lees-only debug_token: verloopdata van de gekozen pagina opslaan.
+    await checkMetaTokenHealth(accountId, { force: true }).catch(() => {});
     return NextResponse.redirect(back("meta=ok"));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "onbekende fout";

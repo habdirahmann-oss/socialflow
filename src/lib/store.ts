@@ -156,3 +156,24 @@ export async function withLock<T>(
     }
   }
 }
+
+/**
+ * Read-modify-write van één key onder `withLock("lock:<key>")`, zodat parallelle
+ * schrijvers (bv. token-verversingen vanuit GET /api/accounts) elkaars
+ * wijzigingen niet overschrijven. Let op: niet nesten op dezelfde key.
+ */
+export async function kvUpdate<T>(
+  key: string,
+  fn: (cur: T | null) => T | Promise<T>,
+  opts: { ttlSec?: number; waitMs?: number } = {},
+): Promise<T> {
+  return withLock(
+    `lock:${key}`,
+    async () => {
+      const next = await fn(await kvGet<T>(key));
+      await kvSet(key, next);
+      return next;
+    },
+    opts,
+  );
+}

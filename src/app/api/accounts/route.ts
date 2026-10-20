@@ -27,20 +27,28 @@ import {
   youtubeConfigured,
 } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
+import { accountHealth } from "@/lib/token-health";
 
 export const runtime = "nodejs";
 
-/** Lijst met accounts, elk verrijkt met hun koppelingsstatus. */
+/**
+ * Lijst met accounts, elk verrijkt met hun koppelingsstatus en `health` per
+ * kanaal ({status, expiresAt?, lastError?, connectedAt?}). Nooit tokens.
+ */
 export async function GET(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   const accounts = await listAccounts();
   const enriched = await Promise.all(
     accounts.map(async (a) => {
-      const store = await loadMetaStore(a.id);
-      const ig = await loadIgConnection(a.id);
-      const tt = await loadTikTokConnection(a.id);
-      const yt = await loadYouTubeConnection(a.id);
+      // eerst de health-check (ververst/controleert en slaat status op), dan lezen
+      const health = await accountHealth(a.id);
+      const [store, ig, tt, yt] = await Promise.all([
+        loadMetaStore(a.id),
+        loadIgConnection(a.id),
+        loadTikTokConnection(a.id),
+        loadYouTubeConnection(a.id),
+      ]);
       const pages = (store?.pages || []).map((p) => ({
         id: p.id,
         name: p.name,
@@ -57,6 +65,7 @@ export async function GET(req: Request) {
         igLogin: ig ? { username: ig.username } : null,
         tiktok: tt ? { displayName: tt.displayName } : null,
         youtube: yt ? { channelTitle: yt.channelTitle } : null,
+        health,
       };
     }),
   );

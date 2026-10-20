@@ -5,12 +5,16 @@ import {
   postToInstagram,
   checkFacebookPage,
   checkInstagramViaPage,
+  markMetaNeedsReauth,
 } from "./meta";
 import {
   loadIgConnection,
   postToInstagramDirect,
   checkInstagramDirect,
+  igNeedsReauth,
+  markIgNeedsReauth,
 } from "./instagram";
+import { expiredMessage, errorText, isMetaTokenError } from "./token-status";
 import { loadTikTokConnection, postToTikTok, tiktokUserInfo } from "./tiktok";
 import { loadYouTubeConnection, postToYouTube, checkYouTube } from "./youtube";
 import {
@@ -131,6 +135,8 @@ export async function publishForAccount(opts: {
 
   const { targets, dropped } = normalizeTargets(opts.targets, kind);
 
+  // load*Connection verversen TikTok/YouTube (en IG) zelf vóór het posten;
+  // mislukt dat definitief, dan staat status op 'needs_reauth'.
   const [store, igConn, ttConn, ytConn] = await Promise.all([
     loadMetaStore(accountId),
     loadIgConnection(accountId),
@@ -209,15 +215,63 @@ export async function publishForAccount(opts: {
 
   const igId = page?.instagram?.id;
 
+  // ---------- Token-gezondheid (T7) ----------
+  // Status 'needs_reauth' → meteen een duidelijke melding, geen zinloze poging.
+  let metaDead = store?.status === "needs_reauth";
+  let igDirectDead = igConn ? igNeedsReauth(igConn) : false;
+  /** Instagram via de Facebook-pagina kan als terugval dienen. */
+  const pageIgUsable = () => Boolean(igId && page && !metaDead);
+
+  /** Meta-fout 190 (pagina-token) → Meta-koppeling op 'opnieuw verbinden nodig'. */
+  async function viaMeta<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (isMetaTokenError(e)) {
+        metaDead = true;
+        await markMetaNeedsReauth(accountId, errorText(e)).catch(() => {});
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Instagram: eerst de IG-login (als die geldig is). Bij fout 190 → IG-login op
+   * needs_reauth en, als de pagina een Instagram heeft, terugvallen op het
+   * pagina-pad. `direct` en `viaPage` zijn de check- of post-varianten.
+   */
+  async function igWithFallback<T>(
+    direct: () => Promise<T>,
+    viaPage: () => Promise<T>,
+  ): Promise<T> {
+    if (igConn && !igDirectDead) {
+      try {
+        return await direct();
+      } catch (e) {
+        if (!isMetaTokenError(e)) throw e;
+        igDirectDead = true;
+        await markIgNeedsReauth(accountId, errorText(e)).catch(() => {});
+        if (!pageIgUsable()) throw e;
+      }
+    }
+    return viaMeta(viaPage);
+  }
+
   const blocks: Promise<PublishResult[]>[] = [
     // ---------- Facebook ----------
     runPlatform(
       "facebook",
       targets.facebook,
-      () => (page ? null : "Geen Facebook-pagina verbonden"),
-      () => checkFacebookPage(page!, CHECK_TIMEOUT_MS),
+      () => {
+        if (!page) return "Geen Facebook-pagina verbonden";
+        if (metaDead) return expiredMessage("Facebook");
+        return null;
+      },
+      () => viaMeta(() => checkFacebookPage(page!, CHECK_TIMEOUT_MS)),
       async () => {
-        const r = await postToFacebookPage(page!, fullText(captions.facebook), media);
+        const r = await viaMeta(() =>
+          postToFacebookPage(page!, fullText(captions.facebook), media),
+        );
         return { id: r.id, url: r.url };
       },
     ),
@@ -228,21 +282,27 @@ export async function publishForAccount(opts: {
       targets.instagram,
       () => {
         if (!igConn && !igId) return "Geen Instagram-account gekoppeld";
+        // IG-login verlopen en geen bruikbare pagina-Instagram, of alleen het
+        // pagina-pad en dat is verlopen
+        const directOk = Boolean(igConn && !igDirectDead);
+        if (!directOk && !pageIgUsable()) return expiredMessage("Instagram");
         if (!media) return "Instagram heeft een foto of video nodig";
         return null;
       },
       () =>
-        igConn
-          ? checkInstagramDirect(igConn.token, CHECK_TIMEOUT_MS)
-          : checkInstagramViaPage(igId!, page!.accessToken, CHECK_TIMEOUT_MS),
+        igWithFallback(
+          () => checkInstagramDirect(igConn!.token, CHECK_TIMEOUT_MS),
+          () => checkInstagramViaPage(igId!, page!.accessToken, CHECK_TIMEOUT_MS),
+        ),
       async (placement) => {
         const caption = fullText(captions.instagram);
         // Na normalisatie: story | reel (video) | feed (foto)
         const plc =
           placement === "story" ? "story" : media!.kind === "video" ? "reel" : "feed";
-        const r = igConn
-          ? await postToInstagramDirect(igConn, media!, caption, plc)
-          : await postToInstagram(igId!, page!.accessToken, media!, caption, plc);
+        const r = await igWithFallback(
+          () => postToInstagramDirect(igConn!, media!, caption, plc),
+          () => postToInstagram(igId!, page!.accessToken, media!, caption, plc),
+        );
         return { id: r.id, url: r.permalink };
       },
     ),
@@ -253,6 +313,7 @@ export async function publishForAccount(opts: {
       targets.tiktok,
       () => {
         if (!ttConn) return "Geen TikTok-account gekoppeld";
+        if (ttConn.status === "needs_reauth") return expiredMessage("TikTok");
         if (!media || media.kind !== "video") return "TikTok heeft een video nodig";
         return null;
       },
@@ -274,6 +335,7 @@ export async function publishForAccount(opts: {
       targets.youtube,
       () => {
         if (!ytConn) return "Geen YouTube-kanaal gekoppeld";
+        if (ytConn.status === "needs_reauth") return expiredMessage("YouTube");
         if (!media || media.kind !== "video") return "YouTube heeft een video nodig";
         return null;
       },

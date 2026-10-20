@@ -6,6 +6,22 @@ import { useSearchParams } from "next/navigation";
 import { PLATFORM_MAP } from "@/lib/platforms";
 import LogoutLink from "@/components/LogoutLink";
 
+type HealthStatus = "ok" | "expiring" | "needs_reauth";
+
+interface ChannelHealth {
+  status: HealthStatus;
+  expiresAt?: number;
+  lastError?: string;
+  connectedAt?: number;
+}
+
+interface AccountHealth {
+  facebook?: ChannelHealth;
+  instagram?: ChannelHealth;
+  tiktok?: ChannelHealth;
+  youtube?: ChannelHealth;
+}
+
 interface AccountState {
   id: string;
   name: string;
@@ -17,6 +33,7 @@ interface AccountState {
   igLogin: { username: string } | null;
   tiktok: { displayName: string } | null;
   youtube: { channelTitle: string } | null;
+  health?: AccountHealth;
 }
 
 export default function VerbindingenPage() {
@@ -399,6 +416,8 @@ function AccountCard({
             </div>
           )}
 
+          {account.facebook && <HealthLine health={account.health?.facebook} />}
+
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {configured ? (
               <a
@@ -446,6 +465,7 @@ function AccountCard({
               📸 <strong>@{account.igLogin.username}</strong>
             </div>
           )}
+          {account.igLogin && <HealthLine health={account.health?.instagram} />}
 
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {igConfigured ? (
@@ -497,6 +517,7 @@ function AccountCard({
               🎵 <strong>{account.tiktok.displayName}</strong>
             </div>
           )}
+          {account.tiktok && <HealthLine health={account.health?.tiktok} />}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {ttConfigured ? (
               <a
@@ -543,6 +564,7 @@ function AccountCard({
               ▶️ <strong>{account.youtube.channelTitle}</strong>
             </div>
           )}
+          {account.youtube && <HealthLine health={account.health?.youtube} />}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {ytConfigured ? (
               <a
@@ -588,6 +610,69 @@ function AccountCard({
         </details>
       )}
     </section>
+  );
+}
+
+const DAY_MS = 86_400_000;
+
+function daysLeft(ts: number): number {
+  return Math.max(0, Math.ceil((ts - Date.now()) / DAY_MS));
+}
+
+function dagen(n: number): string {
+  if (n === 0) return "vandaag";
+  return `over ${n} ${n === 1 ? "dag" : "dagen"}`;
+}
+
+function formatDate(ts: number): string {
+  return new Date(ts).toLocaleDateString("nl-NL", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/**
+ * Token-gezondheid van één koppeling: groen (OK), oranje (verloopt binnen
+ * 10 dagen) of rood (opnieuw verbinden nodig, met de laatste fout).
+ * De bestaande 'Opnieuw verbinden'-knop staat er direct onder.
+ */
+function HealthLine({ health }: { health?: ChannelHealth }) {
+  if (!health) return null;
+  const { status, expiresAt, lastError, connectedAt } = health;
+  let cls: string;
+  let text: string;
+  if (status === "needs_reauth") {
+    cls = "border border-red-500/40 bg-red-500/15 text-red-300";
+    text = "✕ Opnieuw verbinden nodig";
+  } else if (status === "expiring") {
+    cls = "border border-orange-400/40 bg-orange-400/15 text-orange-300";
+    text = expiresAt ? `⚠ Verloopt ${dagen(daysLeft(expiresAt))}` : "⚠ Verloopt binnenkort";
+  } else {
+    cls = "bg-accent/15 text-accent";
+    text = expiresAt
+      ? `✓ OK · verloopt ${dagen(daysLeft(expiresAt))}`
+      : "✓ OK · verloopt niet";
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${cls}`}
+          title={expiresAt ? `Verloopt op ${formatDate(expiresAt)}` : undefined}
+        >
+          {text}
+        </span>
+        {connectedAt ? (
+          <span className="text-[11px] text-muted">
+            gekoppeld op {formatDate(connectedAt)}
+          </span>
+        ) : null}
+      </div>
+      {status === "needs_reauth" && lastError && (
+        <p className="text-[11px] text-red-300/90">Laatste fout: {lastError}</p>
+      )}
+    </div>
   );
 }
 

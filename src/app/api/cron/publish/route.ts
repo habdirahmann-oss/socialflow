@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual, randomUUID } from "crypto";
 import { duePosts, processPost } from "@/lib/schedule";
 import { kvSetNX, kvGet, kvDel, kvSet } from "@/lib/store";
+import { runDailyTokenHealth } from "@/lib/token-health";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,8 @@ const RUN_LOCK_TTL_SEC = 280;
 const MAX_POSTS_PER_RUN = 3;
 /** Na deze tijd pakken we geen nieuwe post meer op. */
 const PICK_WINDOW_MS = 200_000;
+/** Alleen nog de dagelijkse token-run starten als er zoveel tijd over is. */
+const HEALTH_WINDOW_MS = 240_000;
 
 /**
  * Verstuurt ingeplande posts waarvan de tijd verstreken is.
@@ -73,7 +76,13 @@ async function run(req: Request) {
         });
       }
     }
-    await kvSet("cron-last-run", { ranAt, processed }).catch(() => {});
+    // Dagelijks (max. 1× per 24 u, key 'token-health-last'): IG-tokens verversen
+    // en lees-only token-controles voor alle accounts. Posts gaan voor.
+    let tokenHealth: { ranAt: number; accounts: number } | null = null;
+    if (Date.now() - ranAt < HEALTH_WINDOW_MS) {
+      tokenHealth = await runDailyTokenHealth().catch(() => null);
+    }
+    await kvSet("cron-last-run", { ranAt, processed, tokenHealth }).catch(() => {});
   } finally {
     // Alleen onze eigen lock vrijgeven.
     try {

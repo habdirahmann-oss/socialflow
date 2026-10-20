@@ -1,5 +1,13 @@
-import { kvGet, kvSet } from "./store";
-import { fetchJson, fetchRaw, downloadBuffer, MEDIA_TIMEOUT_MS } from "./http";
+import { kvGet, kvSet, kvUpdate, withLock } from "./store";
+import { fetchJson, fetchRaw, downloadBuffer, MEDIA_TIMEOUT_MS, HttpError } from "./http";
+import {
+  REFRESH_LOCK,
+  errorText,
+  isTransientError,
+  toHealth,
+  type ChannelHealth,
+  type TokenHealthFields,
+} from "./token-status";
 
 /* ---------------- Config ---------------- */
 
@@ -33,6 +41,8 @@ interface TikTokTokens {
   access_token: string;
   refresh_token: string;
   expires_in: number;
+  /** Looptijd van het refresh-token (s), standaard 365 dagen. */
+  refresh_expires_in?: number;
   open_id: string;
 }
 
@@ -94,10 +104,13 @@ export async function tiktokUserInfo(
 
 /* ---------------- Opslag per account ---------------- */
 
-export interface TikTokConnection {
+export interface TikTokConnection extends TokenHealthFields {
   accessToken: string;
   refreshToken: string;
+  /** Verloopmoment van het access-token (ms) — wordt automatisch ververst. */
   expiresAt: number;
+  /** Verloopmoment van het refresh-token (ms); daarna opnieuw koppelen. */
+  refreshExpiresAt?: number;
   openId: string;
   displayName: string;
   obtainedAt: number;
@@ -110,41 +123,114 @@ export async function saveTikTokConnection(
   accountId: string,
   conn: TikTokConnection,
 ): Promise<void> {
-  const map = (await kvGet<TikTokStoreMap>(KEY)) ?? {};
-  map[accountId] = conn;
-  await kvSet(KEY, map);
+  await kvUpdate<TikTokStoreMap>(KEY, (cur) => ({ ...(cur ?? {}), [accountId]: conn }));
 }
 
+/** Zet de TikTok-koppeling van dit account op 'opnieuw verbinden nodig'. */
+export async function markTikTokNeedsReauth(
+  accountId: string,
+  lastError: string,
+): Promise<void> {
+  await kvUpdate<TikTokStoreMap>(KEY, (cur) => {
+    const map = cur ?? {};
+    const c = map[accountId];
+    if (c) map[accountId] = { ...c, status: "needs_reauth", lastError, checkedAt: Date.now() };
+    return map;
+  });
+}
+
+const refreshDue = (c: TikTokConnection, now: number) =>
+  c.status !== "needs_reauth" && now > c.expiresAt - 5 * 60_000;
+
+/**
+ * Laadt de koppeling en ververst het access-token als het (bijna) verlopen is.
+ * TikTok roteert het refresh-token: de verversing loopt daarom volledig onder
+ * `lock:tiktok-tokens` (opnieuw lezen → verversen → opslaan), zodat parallelle
+ * aanvragen (bv. GET /api/accounts) nooit een geroteerd token kwijtraken.
+ * Definitieve fout (invalid_grant e.d.) → status needs_reauth + lastError.
+ */
 export async function loadTikTokConnection(
   accountId: string,
 ): Promise<TikTokConnection | null> {
   const map = (await kvGet<TikTokStoreMap>(KEY)) ?? {};
   const conn = map[accountId] || null;
   if (!conn) return null;
-  // ververs indien (bijna) verlopen
-  if (Date.now() > conn.expiresAt - 5 * 60_000) {
-    try {
-      const t = await tiktokRefresh(conn.refreshToken);
-      const updated: TikTokConnection = {
-        ...conn,
-        accessToken: t.access_token,
-        refreshToken: t.refresh_token || conn.refreshToken,
-        expiresAt: Date.now() + (t.expires_in || 86400) * 1000,
-      };
-      map[accountId] = updated;
-      await kvSet(KEY, map);
-      return updated;
-    } catch {
-      return conn; // laat de post-poging de echte fout tonen
+  if (!refreshDue(conn, Date.now())) return conn;
+  try {
+    return await withLock(
+      `lock:${KEY}`,
+      async () => {
+        const fresh = (await kvGet<TikTokStoreMap>(KEY)) ?? {};
+        const cur = fresh[accountId];
+        if (!cur) return null;
+        const now = Date.now();
+        if (!refreshDue(cur, now)) return cur; // al ververst door een ander
+        let updated: TikTokConnection;
+        try {
+          const t = await tiktokRefresh(cur.refreshToken);
+          updated = {
+            ...cur,
+            accessToken: t.access_token,
+            refreshToken: t.refresh_token || cur.refreshToken,
+            expiresAt: now + (t.expires_in || 86400) * 1000,
+            refreshExpiresAt: t.refresh_expires_in
+              ? now + t.refresh_expires_in * 1000
+              : cur.refreshExpiresAt,
+            checkedAt: now,
+            status: "ok",
+          };
+          delete updated.lastError;
+        } catch (e) {
+          updated = isTransientError(e)
+            ? { ...cur, checkedAt: now, lastError: errorText(e) } // later opnieuw
+            : { ...cur, checkedAt: now, status: "needs_reauth", lastError: errorText(e) };
+        }
+        fresh[accountId] = updated;
+        await kvSet(KEY, fresh);
+        return updated;
+      },
+      REFRESH_LOCK,
+    );
+  } catch {
+    return conn; // opslag bezet: laat de post-poging de echte fout tonen
+  }
+}
+
+/** Lees-only controle (dagelijkse health-run). 401/access_token_invalid → needs_reauth. */
+export async function checkTikTokTokenHealth(accountId: string): Promise<void> {
+  const conn = await loadTikTokConnection(accountId); // ververst indien nodig
+  if (!conn || conn.status === "needs_reauth") return;
+  try {
+    await tiktokUserInfo(conn.accessToken, { label: "TikTok-koppeling", timeoutMs: 5000 });
+  } catch (e) {
+    if (
+      e instanceof HttpError &&
+      (e.code === "access_token_invalid" || e.status === 401)
+    ) {
+      await markTikTokNeedsReauth(accountId, errorText(e));
     }
   }
-  return conn;
+}
+
+/** Gezondheid: alleen het refresh-token telt (access-token ververst vanzelf). */
+export function tiktokHealth(conn: TikTokConnection, now = Date.now()): ChannelHealth {
+  return toHealth(
+    {
+      status: conn.status,
+      expiresAt: conn.refreshExpiresAt,
+      lastError: conn.lastError,
+      connectedAt: conn.obtainedAt,
+    },
+    now,
+  );
 }
 
 export async function clearTikTokConnection(accountId: string): Promise<void> {
-  const map = (await kvGet<TikTokStoreMap>(KEY)) ?? {};
-  delete map[accountId];
-  await kvSet(KEY, map);
+  await kvUpdate<TikTokStoreMap>(KEY, (cur) => {
+    const map = cur ?? {};
+    delete map[accountId];
+    return map;
+  });
 }
 
 /* ---------------- Video posten (FILE_UPLOAD) ---------------- */

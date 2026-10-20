@@ -3,6 +3,7 @@ import {
   youtubeExchangeCode,
   youtubeChannel,
   saveYouTubeConnection,
+  peekYouTubeConnection,
   YT,
 } from "@/lib/youtube";
 
@@ -33,9 +34,13 @@ export async function GET(req: Request) {
   try {
     const tokens = await youtubeExchangeCode(code);
     const channel = await youtubeChannel(tokens.access_token);
+    // Google stuurt niet altijd een refresh_token mee bij opnieuw koppelen:
+    // behoud dan het vorige, anders kan de koppeling niet meer verversen.
+    const prev = await peekYouTubeConnection(accountId);
     await saveYouTubeConnection(accountId, {
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token || "",
+      refreshToken: tokens.refresh_token || prev?.refreshToken || "",
+      status: "ok",
       expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000,
       channelId: channel.id,
       channelTitle: channel.title,

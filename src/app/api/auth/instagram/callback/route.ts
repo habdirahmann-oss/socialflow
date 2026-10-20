@@ -41,13 +41,18 @@ export async function GET(req: Request) {
 
   try {
     const short = await igExchangeCode(code);
-    const longToken = await igLongLivedToken(short.access_token);
-    const profile = await igProfile(longToken);
+    const long = await igLongLivedToken(short.access_token);
+    const profile = await igProfile(long.token);
+    const now = Date.now();
     await saveIgConnection(accountId, {
-      token: longToken,
+      token: long.token,
       igUserId: profile.id,
       username: profile.username,
-      obtainedAt: Date.now(),
+      obtainedAt: now,
+      expiresAt: long.expiresAt,
+      refreshedAt: now,
+      checkedAt: now,
+      status: "ok",
     });
     return NextResponse.redirect(back("ig=ok"));
   } catch (e) {

@@ -38,6 +38,10 @@ export async function GET(req: Request) {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt: Date.now() + (tokens.expires_in || 86400) * 1000,
+      refreshExpiresAt: tokens.refresh_expires_in
+        ? Date.now() + tokens.refresh_expires_in * 1000
+        : undefined,
+      status: "ok",
       openId: tokens.open_id || profile.openId,
       displayName: profile.displayName,
       obtainedAt: Date.now(),
