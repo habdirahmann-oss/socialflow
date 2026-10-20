@@ -10,13 +10,31 @@ import {
 } from "@/lib/platforms";
 import type { CaptionResult, PlatformCaption } from "./api/captions/route";
 import LogoutLink from "@/components/LogoutLink";
+import { postJson } from "@/lib/client-fetch";
+import {
+  ACCEPT,
+  prepareMedia,
+  uploadMedia,
+  type PreparedMedia,
+} from "@/lib/upload-client";
 
 /* ---------------- Types ---------------- */
 
 interface MediaItem {
-  url: string;
+  /** blob:-URL voor de preview (nooit naar de server sturen) */
+  previewUrl: string;
+  /** publieke URL na een geslaagde upload (Blob of /api/media) */
+  url: string | null;
   type: "image" | "video";
+  mime: string;
   name: string;
+  width?: number;
+  height?: number;
+  /** seconden (alleen video) */
+  duration?: number;
+  /** 0–100 */
+  progress: number;
+  error: string | null;
 }
 
 interface ScheduledPost {
@@ -49,6 +67,8 @@ interface ServerPost {
   accountName: string;
   scheduledFor: number;
   thumb?: string;
+  mediaType?: "image" | "video";
+  mediaUrl?: string;
   subject: string;
   targets: Record<string, string[]>;
   status: "pending" | "processing" | "posted" | "partial" | "failed";
@@ -72,7 +92,7 @@ function localDateTimeMin(): string {
 /* ---------------- Page ---------------- */
 
 export default function Page() {
-  const [media, setMedia] = useState<MediaItem[]>([]);
+  const [media, setMedia] = useState<MediaItem | null>(null);
   const [subject, setSubject] = useState("");
   const [tone, setTone] = useState<string>(TONES[0]);
   const [selected, setSelected] = useState<Set<PlatformId>>(
@@ -108,8 +128,7 @@ export default function Page() {
 
   /* load accounts + connectiestatus */
   useEffect(() => {
-    fetch("/api/accounts")
-      .then((r) => r.json())
+    postJson<{ accounts?: AccountInfo[] }>("/api/accounts", undefined, "GET")
       .then((d) => {
         const list: AccountInfo[] = d.accounts || [];
         setAccounts(list);
@@ -120,8 +139,7 @@ export default function Page() {
 
   /* load server-side geplande posts */
   const loadSchedule = () => {
-    fetch("/api/schedule")
-      .then((r) => r.json())
+    postJson<{ posts?: ServerPost[] }>("/api/schedule", undefined, "GET")
       .then((d) => setServerPosts(d.posts || []))
       .catch(() => {});
   };
@@ -151,27 +169,107 @@ export default function Page() {
 
   /* ---------------- Media ---------------- */
   const fileRef = useRef<HTMLInputElement>(null);
+  // Huidige upload: bestand (voor 'Opnieuw'), preview-URL en afbreekknop.
+  const preparedRef = useRef<PreparedMedia | null>(null);
+  const previewRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const pickSeq = useRef(0);
 
-  const onFiles = (files: FileList | null) => {
-    if (!files) return;
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setMedia((m) => [
-          ...m,
-          {
-            url: reader.result as string,
-            type: file.type.startsWith("video") ? "video" : "image",
-            name: file.name,
-          },
-        ]);
-      };
-      reader.readAsDataURL(file);
-    });
+  const releaseMedia = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+    previewRef.current = null;
+    preparedRef.current = null;
   };
 
-  const removeMedia = (i: number) =>
-    setMedia((m) => m.filter((_, idx) => idx !== i));
+  // opruimen bij verlaten van de pagina
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+    },
+    [],
+  );
+
+  const startUpload = (prepared: PreparedMedia) => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setMedia((m) => (m ? { ...m, progress: 0, error: null, url: null } : m));
+    uploadMedia(
+      prepared,
+      (pct) => {
+        if (ctrl.signal.aborted) return;
+        setMedia((m) => (m ? { ...m, progress: pct } : m));
+      },
+      ctrl.signal,
+    )
+      .then((url) => {
+        if (ctrl.signal.aborted) return;
+        setMedia((m) => (m ? { ...m, url, progress: 100, error: null } : m));
+      })
+      .catch((e) => {
+        if (ctrl.signal.aborted) return;
+        setMedia((m) =>
+          m
+            ? {
+                ...m,
+                url: null,
+                error: e instanceof Error ? e.message : "Upload mislukt",
+              }
+            : m,
+        );
+      });
+  };
+
+  const onFiles = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    const seq = ++pickSeq.current;
+    let prepared: PreparedMedia;
+    try {
+      prepared = await prepareMedia(file);
+    } catch (e) {
+      if (seq !== pickSeq.current) return;
+      showToast(e instanceof Error ? e.message : "Bestand niet bruikbaar");
+      return;
+    }
+    if (seq !== pickSeq.current) {
+      URL.revokeObjectURL(prepared.previewUrl);
+      return;
+    }
+    // Nieuwe keuze vervangt de vorige (één media-item per post).
+    releaseMedia();
+    preparedRef.current = prepared;
+    previewRef.current = prepared.previewUrl;
+    setMedia({
+      previewUrl: prepared.previewUrl,
+      url: null,
+      type: prepared.type,
+      mime: prepared.mime,
+      name: file.name,
+      width: prepared.width,
+      height: prepared.height,
+      duration: prepared.duration,
+      progress: 0,
+      error: null,
+    });
+    startUpload(prepared);
+  };
+
+  const retryUpload = () => {
+    if (preparedRef.current) startUpload(preparedRef.current);
+  };
+
+  const removeMedia = () => {
+    pickSeq.current++;
+    releaseMedia();
+    setMedia(null);
+  };
+
+  const mediaUploading = Boolean(media && !media.url && !media.error);
+  const mediaFailed = Boolean(media?.error);
 
   /* ---------------- Platforms ---------------- */
   const togglePlatform = (id: PlatformId) => {
@@ -207,19 +305,18 @@ export default function Page() {
     setLoading(true);
     setSource(null);
     try {
-      const res = await fetch("/api/captions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          subject,
-          tone,
-          platforms: Array.from(selected),
-        }),
+      const data = await postJson<{
+        result?: CaptionResult;
+        source?: string;
+        error?: string;
+      }>("/api/captions", {
+        subject,
+        tone,
+        platforms: Array.from(selected),
       });
-      const data = await res.json();
       if (data.result) {
         setCaptions(data.result);
-        setSource(data.source);
+        setSource(data.source ?? null);
         if (!selected.has(activePreview)) {
           setActivePreview(Array.from(selected)[0]);
         }
@@ -231,8 +328,8 @@ export default function Page() {
       } else {
         showToast(data.error || "Genereren mislukt");
       }
-    } catch {
-      showToast("Kon de server niet bereiken");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Genereren mislukt");
     } finally {
       setLoading(false);
     }
@@ -275,12 +372,21 @@ export default function Page() {
     tiktok: captions.tiktok,
     youtube: captions.youtube,
   });
+  // Alleen de publieke URL gaat mee (de upload is al klaar) → kleine JSON-body.
   const mediaPayload = () =>
-    media[0] ? { dataUrl: media[0].url, type: media[0].type } : null;
+    media?.url ? { url: media.url, type: media.type } : null;
 
   const publish = async () => {
     if (!canPublish) {
       showToast("Genereer eerst de captions");
+      return;
+    }
+    if (mediaUploading) {
+      showToast("Wacht tot de upload klaar is");
+      return;
+    }
+    if (mediaFailed) {
+      showToast("De upload is mislukt — klik op 'Opnieuw' of kies een ander bestand");
       return;
     }
     const isNow = schedule === "now";
@@ -302,10 +408,9 @@ export default function Page() {
       }
       setPublishing(true);
       try {
-        const res = await fetch("/api/schedule", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+        const data = await postJson<{ ok?: boolean; error?: string }>(
+          "/api/schedule",
+          {
             // client-id → dubbel klikken / opnieuw versturen maakt geen tweede post
             id: crypto.randomUUID(),
             accountId,
@@ -315,9 +420,8 @@ export default function Page() {
             subject,
             targets: buildTargets(),
             captions: buildCaptions(),
-          }),
-        });
-        const data = await res.json();
+          },
+        );
         if (data.ok) {
           const when = new Date(ts).toLocaleString("nl-NL", {
             day: "numeric",
@@ -332,8 +436,10 @@ export default function Page() {
         } else {
           showToast(data.error || "Inplannen mislukt");
         }
-      } catch {
-        showToast("Inplannen mislukt — server onbereikbaar");
+      } catch (e) {
+        showToast(
+          `Inplannen mislukt: ${e instanceof Error ? e.message : "onbekende fout"}`,
+        );
       } finally {
         setPublishing(false);
       }
@@ -345,18 +451,16 @@ export default function Page() {
     let msg = "";
     let posted = false;
     try {
-      const res = await fetch("/api/publish", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          accountId,
-          media: mediaPayload(),
-          targets: buildTargets(),
-          captions: buildCaptions(),
-          dryRun,
-        }),
+      const data = await postJson<{
+        results?: { ok: boolean; error?: string; platform?: string }[];
+        error?: string;
+      }>("/api/publish", {
+        accountId,
+        media: mediaPayload(),
+        targets: buildTargets(),
+        captions: buildCaptions(),
+        dryRun,
       });
-      const data = await res.json();
       const results: { ok: boolean; error?: string; platform?: string }[] =
         data.results || [];
       const okCount = results.filter((r) => r.ok).length;
@@ -374,8 +478,8 @@ export default function Page() {
             (msg ? " · " : "") +
             `${failed.length} mislukt: ${failed[0].error ?? ""}`;
       }
-    } catch {
-      msg = "Posten mislukt — server onbereikbaar";
+    } catch (e) {
+      msg = `Posten mislukt: ${e instanceof Error ? e.message : "onbekende fout"}`;
     } finally {
       setPublishing(false);
     }
@@ -388,8 +492,8 @@ export default function Page() {
         platforms: Array.from(selected),
         placements,
         captions,
-        thumb: media[0]?.url,
-        thumbType: media[0]?.type,
+        thumb: media?.url ?? undefined,
+        thumbType: media?.type,
         when: "now",
         status: "gepost",
       };
@@ -401,12 +505,16 @@ export default function Page() {
   const cancelScheduled = async (id: string) => {
     setServerPosts((s) => s.filter((p) => p.id !== id));
     try {
-      const res = await fetch(`/api/schedule?id=${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        showToast(data.error || "Annuleren mislukt");
-      }
-    } catch {}
+      await postJson(
+        `/api/schedule?id=${encodeURIComponent(id)}`,
+        undefined,
+        "DELETE",
+      );
+    } catch (e) {
+      showToast(
+        `Annuleren mislukt: ${e instanceof Error ? e.message : "onbekende fout"}`,
+      );
+    }
     loadSchedule();
   };
 
@@ -436,51 +544,95 @@ export default function Page() {
               >
                 <div className="mb-2 text-3xl">📤</div>
                 <p className="text-sm font-medium">
-                  Sleep foto&apos;s of video&apos;s hierheen
+                  {media
+                    ? "Sleep een ander bestand hierheen om te vervangen"
+                    : "Sleep een foto of video hierheen"}
                 </p>
-                <p className="mt-1 text-xs text-muted">of klik om te kiezen</p>
+                <p className="mt-1 text-xs text-muted">
+                  of klik om te kiezen · JPG, PNG, MP4 of MOV (max 500 MB)
+                </p>
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/*,video/*"
-                  multiple
+                  accept={ACCEPT}
                   hidden
-                  onChange={(e) => onFiles(e.target.files)}
+                  onChange={(e) => {
+                    onFiles(e.target.files);
+                    // zelfde bestand opnieuw kiezen moet ook werken
+                    e.target.value = "";
+                  }}
                 />
               </div>
 
-              {media.length > 0 && (
-                <div className="mt-3 grid grid-cols-4 gap-2">
-                  {media.map((m, i) => (
-                    <div
-                      key={i}
-                      className="group relative aspect-square overflow-hidden rounded-lg border border-border bg-black"
+              {media && (
+                <div className="mt-3 flex items-start gap-3">
+                  <div className="group relative aspect-square w-24 shrink-0 overflow-hidden rounded-lg border border-border bg-black">
+                    {media.type === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={media.previewUrl}
+                        alt={media.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <video
+                        src={media.previewUrl}
+                        className="h-full w-full object-cover"
+                        muted
+                        playsInline
+                        controls
+                      />
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeMedia();
+                      }}
+                      title="Verwijderen"
+                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-xs text-white opacity-80 transition group-hover:opacity-100"
                     >
-                      {m.type === "image" ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={m.url}
-                          alt={m.name}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <video
-                          src={m.url}
-                          className="h-full w-full object-cover"
-                          muted
-                        />
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeMedia(i);
-                        }}
-                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-xs text-white opacity-0 transition group-hover:opacity-100"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
+                      ✕
+                    </button>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">{media.name}</p>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      {media.type === "image" ? "Foto (JPEG)" : "Video"}
+                      {media.width && media.height
+                        ? ` · ${media.width}×${media.height}`
+                        : ""}
+                      {media.duration
+                        ? ` · ${Math.round(media.duration)} s`
+                        : ""}
+                    </p>
+                    {media.error ? (
+                      <div className="mt-2">
+                        <p className="text-[11px] text-red-400">{media.error}</p>
+                        <button
+                          onClick={retryUpload}
+                          className="mt-1.5 rounded-md border border-border bg-surface-2/60 px-2.5 py-1 text-[11px] transition hover:border-brand"
+                        >
+                          Opnieuw
+                        </button>
+                      </div>
+                    ) : media.url ? (
+                      <p className="mt-2 text-[11px] text-accent">
+                        ✓ Geüpload
+                      </p>
+                    ) : (
+                      <div className="mt-2">
+                        <p className="text-[11px] text-muted">
+                          Uploaden… {media.progress}%
+                        </p>
+                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+                          <div
+                            className="h-full rounded-full bg-brand transition-[width]"
+                            style={{ width: `${media.progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </Card>
@@ -621,7 +773,7 @@ export default function Page() {
                     <div className="flex flex-col items-center gap-3">
                       <PhonePreview
                         platform={activePreview}
-                        media={media[0]}
+                        media={media ?? undefined}
                         caption={activeCaption}
                         placements={placements[activePreview] || []}
                       />
@@ -738,13 +890,22 @@ export default function Page() {
                       </p>
                       <button
                         onClick={publish}
-                        disabled={publishing}
+                        disabled={publishing || mediaUploading || mediaFailed}
+                        title={
+                          mediaUploading
+                            ? "Wacht tot de upload klaar is"
+                            : mediaFailed
+                              ? "De upload is mislukt"
+                              : undefined
+                        }
                         className="rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-60"
                       >
                         {publishing ? (
                           <span className="flex items-center gap-2">
                             <Spinner /> Bezig…
                           </span>
+                        ) : mediaUploading ? (
+                          `Uploaden… ${media?.progress ?? 0}%`
                         ) : schedule === "later" ? (
                           "Plan in"
                         ) : dryRun ? (
@@ -797,7 +958,16 @@ export default function Page() {
                           className="flex items-center gap-3 rounded-xl border border-border bg-surface-2/40 p-2.5"
                         >
                           <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-black">
-                            {p.thumb ? (
+                            {p.mediaType === "video" &&
+                            /^https?:/.test(p.mediaUrl || "") ? (
+                              <video
+                                src={p.mediaUrl}
+                                className="h-full w-full object-cover"
+                                muted
+                                playsInline
+                                preload="metadata"
+                              />
+                            ) : p.thumb && p.mediaType !== "video" ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={p.thumb}
@@ -1255,10 +1425,10 @@ function MediaBox({
     );
   return media.type === "image" ? (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={media.url} alt="" className={`object-cover ${className}`} />
+    <img src={media.previewUrl} alt="" className={`object-cover ${className}`} />
   ) : (
     <video
-      src={media.url}
+      src={media.previewUrl}
       className={`object-cover ${className}`}
       muted
       loop

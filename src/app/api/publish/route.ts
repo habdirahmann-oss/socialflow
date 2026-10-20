@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   publishForAccount,
-  resolveMediaUrl,
+  resolveMediaInput,
+  type MediaInput,
   type PublishTargets,
   type PublishCaptions,
 } from "@/lib/publish";
@@ -12,7 +13,8 @@ export const maxDuration = 300; // video's kunnen even duren (Hobby + Fluid Comp
 
 interface PublishBody {
   accountId: string;
-  media?: { dataUrl: string; type: "image" | "video" } | null;
+  /** Bij voorkeur { url, type } (directe upload); { dataUrl, type } blijft als fallback. */
+  media?: MediaInput | null;
   targets: PublishTargets;
   captions: PublishCaptions;
   dryRun?: boolean;
@@ -27,26 +29,28 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "Ongeldige aanvraag" }, { status: 400 });
   }
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Ongeldige aanvraag" }, { status: 400 });
+  }
+  const dryRun = body.dryRun === true;
 
-  let mediaUrl: string | undefined;
-  if (body.media?.dataUrl) {
-    try {
-      mediaUrl = await resolveMediaUrl(body.media.dataUrl);
-    } catch (e) {
-      return NextResponse.json(
-        { error: e instanceof Error ? e.message : "Media opslaan mislukt" },
-        { status: 400 },
-      );
-    }
+  let media: Awaited<ReturnType<typeof resolveMediaInput>>;
+  try {
+    media = await resolveMediaInput(body.media, dryRun);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Media opslaan mislukt" },
+      { status: 400 },
+    );
   }
 
   const out = await publishForAccount({
     accountId: body.accountId,
-    mediaUrl,
-    mediaType: body.media?.type,
+    mediaUrl: media?.url,
+    mediaType: media?.type,
     targets: body.targets,
     captions: body.captions,
-    dryRun: body.dryRun,
+    dryRun,
   });
 
   if (out.error) return NextResponse.json({ error: out.error }, { status: 400 });

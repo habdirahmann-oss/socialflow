@@ -54,5 +54,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image).*)"],
+  // /api/upload staat bewust buiten de proxy: de proxy buffert request-bodies
+  // (max 10 MB) en zou grote lokale uploads afkappen. De route checkt de
+  // sessie zelf met requireAuth.
+  matcher: ["/((?!_next/static|_next/image|api/upload).*)"],
 };

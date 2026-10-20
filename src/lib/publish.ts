@@ -3,12 +3,16 @@ import {
   activePage,
   postToFacebookPage,
   postToInstagram,
-  META,
 } from "./meta";
 import { loadIgConnection, postToInstagramDirect } from "./instagram";
 import { loadTikTokConnection, postToTikTok } from "./tiktok";
 import { loadYouTubeConnection, postToYouTube } from "./youtube";
-import { saveDataUrl } from "./media";
+import {
+  saveDataUrl,
+  validateDataUrl,
+  isAllowedMediaUrl,
+  APP_URL,
+} from "./media";
 import type { PlatformCaption } from "@/app/api/captions/route";
 
 export interface PublishTargets {
@@ -39,13 +43,41 @@ export function fullText(c?: PlatformCaption): string {
   return [c.caption, tags].filter(Boolean).join("\n\n");
 }
 
-/** Zet een data-URL om naar een publieke URL (Blob/lokaal). */
-export async function resolveMediaUrl(
-  dataUrl?: string | null,
-): Promise<string | undefined> {
-  if (!dataUrl) return undefined;
-  const saved = await saveDataUrl(dataUrl);
-  return saved.url || `${META.appUrl}/api/media/${saved.id}`;
+/** Media zoals de client 'm meestuurt: bij voorkeur alleen een URL. */
+export interface MediaInput {
+  url?: unknown;
+  /** Oude route (max 4 MB): base64 data-URL. */
+  dataUrl?: unknown;
+  type?: unknown;
+}
+
+/**
+ * Bepaalt de publieke media-URL voor een publish/schedule-aanvraag.
+ * - `url`: moet van onze Blob-store of /api/media komen (SSRF-bescherming).
+ * - `dataUrl`: fallback; wordt gevalideerd en (behalve in testmodus) opgeslagen.
+ * In testmodus wordt nooit iets geüpload.
+ * Gooit een Error met een Nederlandse melding (→ 400).
+ */
+export async function resolveMediaInput(
+  media: MediaInput | null | undefined,
+  dryRun: boolean,
+): Promise<{ url: string; type: "image" | "video" } | undefined> {
+  if (!media || typeof media !== "object") return undefined;
+  const type: "image" | "video" = media.type === "image" ? "image" : "video";
+
+  if (media.url !== undefined && media.url !== null && media.url !== "") {
+    if (!isAllowedMediaUrl(media.url)) throw new Error("Ongeldige media-URL");
+    return { url: media.url, type };
+  }
+  if (typeof media.dataUrl === "string" && media.dataUrl) {
+    if (dryRun) {
+      validateDataUrl(media.dataUrl);
+      return { url: "dry-run://media", type };
+    }
+    const saved = await saveDataUrl(media.dataUrl);
+    return { url: saved.url || `${APP_URL}/api/media/${saved.id}`, type };
+  }
+  return undefined;
 }
 
 /**

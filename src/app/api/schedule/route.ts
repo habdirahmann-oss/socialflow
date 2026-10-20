@@ -7,7 +7,7 @@ import {
   removeScheduled,
   type ScheduledPost,
 } from "@/lib/schedule";
-import { resolveMediaUrl } from "@/lib/publish";
+import { resolveMediaInput, type MediaInput } from "@/lib/publish";
 import { accountExists } from "@/lib/accounts";
 import { requireAuth } from "@/lib/auth";
 
@@ -18,7 +18,8 @@ interface ScheduleBody {
   accountId?: unknown;
   accountName?: unknown;
   scheduledFor?: unknown;
-  media?: { dataUrl: string; type: "image" | "video" } | null;
+  /** Bij voorkeur { url, type } (directe upload); { dataUrl, type } blijft als fallback. */
+  media?: MediaInput | null;
   subject?: unknown;
   targets?: unknown;
   captions?: unknown;
@@ -36,6 +37,8 @@ function slim(p: ScheduledPost) {
     accountName: p.accountName,
     scheduledFor: p.scheduledFor,
     thumb: p.thumb,
+    mediaType: p.mediaType,
+    mediaUrl: p.mediaUrl,
     subject: p.subject,
     targets: p.targets,
     status: p.status,
@@ -121,14 +124,13 @@ export async function POST(req: Request) {
       ? (body.captions as ScheduledPost["captions"])
       : {};
 
-  let mediaUrl: string | undefined;
-  if (body.media?.dataUrl) {
-    try {
-      mediaUrl = await resolveMediaUrl(body.media.dataUrl);
-    } catch (e) {
-      return bad(e instanceof Error ? e.message : "Media opslaan mislukt");
-    }
+  let media: Awaited<ReturnType<typeof resolveMediaInput>>;
+  try {
+    media = await resolveMediaInput(body.media, body.dryRun === true);
+  } catch (e) {
+    return bad(e instanceof Error ? e.message : "Media opslaan mislukt");
   }
+  const mediaUrl = media?.url;
 
   const post: ScheduledPost = {
     id,
@@ -139,8 +141,9 @@ export async function POST(req: Request) {
         : "account",
     scheduledFor,
     mediaUrl,
-    mediaType: body.media?.type === "image" ? "image" : body.media ? "video" : undefined,
-    thumb: mediaUrl,
+    mediaType: media?.type,
+    // Alleen foto's krijgen een thumb; video's toont de lijst als <video>.
+    thumb: media?.type === "image" && /^https?:/.test(media.url) ? media.url : undefined,
     subject:
       typeof body.subject === "string" && body.subject
         ? body.subject
