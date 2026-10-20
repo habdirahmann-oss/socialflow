@@ -5,6 +5,7 @@ import {
   type PublishCaptions,
   type PublishResult,
 } from "./publish";
+import { normalizeTargets } from "./targets";
 
 export type ScheduledStatus =
   | "pending" // wacht op tijdstip (of op een volgende poging)
@@ -191,13 +192,27 @@ function targetPairs(targets: PublishTargets): { platform: string; placement: st
   return out;
 }
 
+/**
+ * De plaatsingen die met de media van deze post echt kunnen (zie targets.ts).
+ * Zo blijft een post niet eeuwig 'onvolledig' door bv. een Facebook-story of
+ * een IG feed+reel die bij video samenvallen tot één reel.
+ */
+export function effectiveTargets(post: ScheduledPost): PublishTargets {
+  const kind = post.mediaUrl
+    ? post.mediaType === "image"
+      ? "image"
+      : "video"
+    : undefined;
+  return normalizeTargets(post.targets, kind).targets;
+}
+
 /** Doelen zonder geslaagd resultaat — alleen die worden (opnieuw) verstuurd. */
 export function remainingTargets(post: ScheduledPost): PublishTargets {
   const done = new Set(
     (post.results || []).filter((r) => r.ok).map(resultKey),
   );
   const out: PublishTargets = {};
-  for (const { platform, placement } of targetPairs(post.targets)) {
+  for (const { platform, placement } of targetPairs(effectiveTargets(post))) {
     if (done.has(`${platform}:${placement}`)) continue;
     const key = platform as keyof PublishTargets;
     (out[key] ||= []).push(placement);
@@ -250,7 +265,7 @@ export async function finishPost(
     }
     const results = [...merged.values()];
 
-    const pairs = targetPairs(p.targets);
+    const pairs = targetPairs(effectiveTargets(p));
     const okKeys = new Set(results.filter((r) => r.ok).map(resultKey));
     const allOk = pairs.length > 0 && pairs.every((t) => okKeys.has(resultKey(t)));
     const anyOk = results.some((r) => r.ok);

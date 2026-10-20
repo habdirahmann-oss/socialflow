@@ -3,24 +3,32 @@ import {
   activePage,
   postToFacebookPage,
   postToInstagram,
+  checkFacebookPage,
+  checkInstagramViaPage,
 } from "./meta";
-import { loadIgConnection, postToInstagramDirect } from "./instagram";
-import { loadTikTokConnection, postToTikTok } from "./tiktok";
-import { loadYouTubeConnection, postToYouTube } from "./youtube";
+import {
+  loadIgConnection,
+  postToInstagramDirect,
+  checkInstagramDirect,
+} from "./instagram";
+import { loadTikTokConnection, postToTikTok, tiktokUserInfo } from "./tiktok";
+import { loadYouTubeConnection, postToYouTube, checkYouTube } from "./youtube";
 import {
   saveDataUrl,
   validateDataUrl,
   isAllowedMediaUrl,
   APP_URL,
 } from "./media";
+import {
+  normalizeTargets,
+  fullText,
+  type DroppedTarget,
+  type PublishTargets,
+} from "./targets";
 import type { PlatformCaption } from "@/app/api/captions/route";
 
-export interface PublishTargets {
-  facebook?: string[];
-  instagram?: string[];
-  tiktok?: string[];
-  youtube?: string[];
-}
+export { fullText, normalizeTargets };
+export type { DroppedTarget, PublishTargets };
 
 export interface PublishCaptions {
   facebook?: PlatformCaption;
@@ -34,13 +42,22 @@ export interface PublishResult {
   placement: string;
   ok: boolean;
   id?: string;
+  /** Link naar de geplaatste post (indien bekend). */
+  url?: string;
+  /** Extra info, bv. dat YouTube de video privé heeft gezet. */
+  note?: string;
   error?: string;
 }
 
-export function fullText(c?: PlatformCaption): string {
-  if (!c) return "";
-  const tags = (c.hashtags || []).map((h) => `#${h}`).join(" ");
-  return [c.caption, tags].filter(Boolean).join("\n\n");
+export interface PublishOutcome {
+  /** Minstens één plaatsing gelukt (backwards compatible). */
+  ok: boolean;
+  /** Alle plaatsingen gelukt. */
+  allOk: boolean;
+  results: PublishResult[];
+  /** Plaatsingen die niet bij deze media passen en zijn overgeslagen. */
+  dropped: DroppedTarget[];
+  error?: string;
 }
 
 /** Media zoals de client 'm meestuurt: bij voorkeur alleen een URL. */
@@ -80,10 +97,20 @@ export async function resolveMediaInput(
   return undefined;
 }
 
+/** Time-out voor de lees-only tokencontroles in testmodus. */
+const CHECK_TIMEOUT_MS = 5000;
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : "mislukt");
+
 /**
  * Kern-publiceerfunctie — gedeeld door de directe "Post nu" én de cron-scheduler.
- * `mediaUrl` is al een PUBLIEKE url (geen data-URL). dryRun controleert alleen
- * de koppeling zonder echt te posten.
+ * `mediaUrl` is al een PUBLIEKE url (geen data-URL).
+ *
+ * - Plaatsingen worden eerst genormaliseerd (zie targets.ts); wat niet kan,
+ *   staat in `dropped`.
+ * - De kanalen lopen parallel; plaatsingen binnen één kanaal na elkaar.
+ * - dryRun: controleert media/plaatsing + doet goedkope LEES-ONLY
+ *   tokencontroles (5 s). Er wordt niets geüpload of geplaatst.
  */
 export async function publishForAccount(opts: {
   accountId: string;
@@ -92,128 +119,203 @@ export async function publishForAccount(opts: {
   targets: PublishTargets;
   captions: PublishCaptions;
   dryRun?: boolean;
-}): Promise<{ ok: boolean; results: PublishResult[]; error?: string }> {
-  const { accountId, mediaUrl, targets, captions, dryRun } = opts;
-  const isImage = opts.mediaType === "image";
-  const media = mediaUrl
-    ? { url: mediaUrl, kind: (isImage ? "image" : "video") as "image" | "video" }
+}): Promise<PublishOutcome> {
+  const { accountId, mediaUrl, dryRun } = opts;
+  const captions: PublishCaptions = opts.captions || {};
+  const kind: "image" | "video" | undefined = mediaUrl
+    ? opts.mediaType === "image"
+      ? "image"
+      : "video"
     : undefined;
+  const media = mediaUrl && kind ? { url: mediaUrl, kind } : undefined;
 
-  const store = await loadMetaStore(accountId);
-  const igConn = await loadIgConnection(accountId);
-  const ttConn = await loadTikTokConnection(accountId);
-  const ytConn = await loadYouTubeConnection(accountId);
+  const { targets, dropped } = normalizeTargets(opts.targets, kind);
+
+  const [store, igConn, ttConn, ytConn] = await Promise.all([
+    loadMetaStore(accountId),
+    loadIgConnection(accountId),
+    loadTikTokConnection(accountId),
+    loadYouTubeConnection(accountId),
+  ]);
   const page = activePage(store);
 
   if (!page && !igConn && !ttConn && !ytConn) {
-    return { ok: false, results: [], error: "Dit account is nog niet verbonden" };
+    return {
+      ok: false,
+      allOk: false,
+      results: [],
+      dropped,
+      error: "Dit account is nog niet verbonden",
+    };
+  }
+  const total = Object.values(targets).reduce((n, v) => n + (v?.length || 0), 0);
+  if (total === 0) {
+    const why = dropped.length
+      ? `: ${dropped.map((d) => `${d.platform} ${d.placement} (${d.reason})`).join(", ")}`
+      : "";
+    return {
+      ok: false,
+      allOk: false,
+      results: [],
+      dropped,
+      error: `Niets om te plaatsen met deze media${why}`,
+    };
   }
 
-  const results: PublishResult[] = [];
-  const dry = (platform: string, placement: string, need?: string) =>
-    results.push({
-      platform,
-      placement,
-      ok: !need,
-      id: need ? undefined : "dry-run",
-      error: need,
-    });
+  /**
+   * Draait de plaatsingen van één kanaal na elkaar. `check` is de lees-only
+   * controle voor testmodus (één keer per kanaal); `post` plaatst echt.
+   */
+  async function runPlatform(
+    platform: keyof PublishTargets,
+    placements: string[] | undefined,
+    setup: () => string | null,
+    check: () => Promise<void>,
+    post: (placement: string) => Promise<Omit<PublishResult, "platform" | "placement" | "ok">>,
+  ): Promise<PublishResult[]> {
+    const out: PublishResult[] = [];
+    if (!placements?.length) return out;
+    const fail = (placement: string, error: string) =>
+      out.push({ platform, placement, ok: false, error });
 
-  // ---------- Facebook ----------
-  for (const placement of targets.facebook || []) {
-    try {
-      if (!page) throw new Error("Geen Facebook-pagina verbonden");
-      if (placement !== "feed")
-        throw new Error("Facebook-stories via API komen later");
-      if (dryRun) {
-        dry("facebook", placement);
-        continue;
-      }
-      const r = await postToFacebookPage(page, fullText(captions.facebook), media);
-      results.push({ platform: "facebook", placement, ok: true, id: r.id });
-    } catch (e) {
-      results.push({
-        platform: "facebook",
-        placement,
-        ok: false,
-        error: e instanceof Error ? e.message : "mislukt",
-      });
+    const missing = setup();
+    if (missing) {
+      for (const p of placements) fail(p, missing);
+      return out;
     }
+    if (dryRun) {
+      let error: string | undefined;
+      try {
+        await check();
+      } catch (e) {
+        error = errMsg(e);
+      }
+      for (const p of placements) {
+        if (error) fail(p, error);
+        else out.push({ platform, placement: p, ok: true, id: "dry-run" });
+      }
+      return out;
+    }
+    for (const p of placements) {
+      try {
+        const r = await post(p);
+        out.push({ platform, placement: p, ok: true, ...r });
+      } catch (e) {
+        fail(p, errMsg(e));
+      }
+    }
+    return out;
   }
 
-  // ---------- Instagram ----------
   const igId = page?.instagram?.id;
-  for (const placement of targets.instagram || []) {
-    try {
-      if (!igConn && !igId) throw new Error("Geen Instagram-account gekoppeld");
-      if (!media) throw new Error("Instagram heeft een foto of video nodig");
-      if (dryRun) {
-        dry("instagram", placement);
-        continue;
-      }
-      const caption = fullText(captions.instagram);
-      const plc = placement === "story" ? "story" : "feed";
-      const r = igConn
-        ? await postToInstagramDirect(igConn, media, caption, plc)
-        : await postToInstagram(igId!, page!.accessToken, media, caption, plc);
-      results.push({ platform: "instagram", placement, ok: true, id: r.id });
-    } catch (e) {
-      results.push({
-        platform: "instagram",
-        placement,
-        ok: false,
-        error: e instanceof Error ? e.message : "mislukt",
-      });
-    }
-  }
 
-  // ---------- TikTok ----------
-  for (const placement of targets.tiktok || []) {
-    try {
-      if (!ttConn) throw new Error("Geen TikTok-account gekoppeld");
-      if (!mediaUrl || isImage) throw new Error("TikTok heeft een video nodig");
-      if (dryRun) {
-        dry("tiktok", placement);
-        continue;
-      }
-      const r = await postToTikTok(ttConn, mediaUrl, fullText(captions.tiktok));
-      results.push({ platform: "tiktok", placement, ok: true, id: r.id });
-    } catch (e) {
-      results.push({
-        platform: "tiktok",
-        placement,
-        ok: false,
-        error: e instanceof Error ? e.message : "mislukt",
-      });
-    }
-  }
+  const blocks: Promise<PublishResult[]>[] = [
+    // ---------- Facebook ----------
+    runPlatform(
+      "facebook",
+      targets.facebook,
+      () => (page ? null : "Geen Facebook-pagina verbonden"),
+      () => checkFacebookPage(page!, CHECK_TIMEOUT_MS),
+      async () => {
+        const r = await postToFacebookPage(page!, fullText(captions.facebook), media);
+        return { id: r.id, url: r.url };
+      },
+    ),
 
-  // ---------- YouTube (Shorts) ----------
-  for (const placement of targets.youtube || []) {
-    try {
-      if (!ytConn) throw new Error("Geen YouTube-kanaal gekoppeld");
-      if (!mediaUrl || isImage) throw new Error("YouTube heeft een video nodig");
-      if (dryRun) {
-        dry("youtube", placement);
-        continue;
-      }
-      const c = captions.youtube;
-      const r = await postToYouTube(
-        ytConn,
-        mediaUrl,
-        c?.title || c?.caption?.slice(0, 90) || "Nieuwe video",
-        fullText(c),
-      );
-      results.push({ platform: "youtube", placement, ok: true, id: r.id });
-    } catch (e) {
-      results.push({
-        platform: "youtube",
-        placement,
-        ok: false,
-        error: e instanceof Error ? e.message : "mislukt",
-      });
-    }
-  }
+    // ---------- Instagram ----------
+    runPlatform(
+      "instagram",
+      targets.instagram,
+      () => {
+        if (!igConn && !igId) return "Geen Instagram-account gekoppeld";
+        if (!media) return "Instagram heeft een foto of video nodig";
+        return null;
+      },
+      () =>
+        igConn
+          ? checkInstagramDirect(igConn.token, CHECK_TIMEOUT_MS)
+          : checkInstagramViaPage(igId!, page!.accessToken, CHECK_TIMEOUT_MS),
+      async (placement) => {
+        const caption = fullText(captions.instagram);
+        // Na normalisatie: story | reel (video) | feed (foto)
+        const plc =
+          placement === "story" ? "story" : media!.kind === "video" ? "reel" : "feed";
+        const r = igConn
+          ? await postToInstagramDirect(igConn, media!, caption, plc)
+          : await postToInstagram(igId!, page!.accessToken, media!, caption, plc);
+        return { id: r.id, url: r.permalink };
+      },
+    ),
 
-  return { ok: results.some((r) => r.ok), results };
+    // ---------- TikTok ----------
+    runPlatform(
+      "tiktok",
+      targets.tiktok,
+      () => {
+        if (!ttConn) return "Geen TikTok-account gekoppeld";
+        if (!media || media.kind !== "video") return "TikTok heeft een video nodig";
+        return null;
+      },
+      async () => {
+        await tiktokUserInfo(ttConn!.accessToken, {
+          label: "TikTok-koppeling",
+          timeoutMs: CHECK_TIMEOUT_MS,
+        });
+      },
+      async () => {
+        const r = await postToTikTok(ttConn!, media!.url, fullText(captions.tiktok));
+        return { id: r.id };
+      },
+    ),
+
+    // ---------- YouTube ----------
+    runPlatform(
+      "youtube",
+      targets.youtube,
+      () => {
+        if (!ytConn) return "Geen YouTube-kanaal gekoppeld";
+        if (!media || media.kind !== "video") return "YouTube heeft een video nodig";
+        return null;
+      },
+      () => checkYouTube(ytConn!.accessToken, CHECK_TIMEOUT_MS),
+      async (placement) => {
+        const c = captions.youtube;
+        const r = await postToYouTube(
+          ytConn!,
+          media!.url,
+          c?.title || c?.caption?.slice(0, 90) || "Nieuwe video",
+          fullText(c),
+          placement === "short" ? "short" : "video",
+        );
+        return {
+          id: r.id,
+          url: r.url,
+          note:
+            r.privacyStatus === "private"
+              ? "privé gezet door YouTube (project niet geverifieerd)"
+              : undefined,
+        };
+      },
+    ),
+  ];
+
+  const settled = await Promise.allSettled(blocks);
+  const order = ["facebook", "instagram", "tiktok", "youtube"] as const;
+  const results: PublishResult[] = settled.flatMap((s, i) =>
+    s.status === "fulfilled"
+      ? s.value
+      : (targets[order[i]] || []).map((placement) => ({
+          platform: order[i],
+          placement,
+          ok: false,
+          error: errMsg(s.reason),
+        })),
+  );
+
+  return {
+    ok: results.some((r) => r.ok),
+    allOk: results.length > 0 && results.every((r) => r.ok),
+    results,
+    dropped,
+  };
 }

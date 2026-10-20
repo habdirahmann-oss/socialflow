@@ -1,4 +1,5 @@
 import { kvGet, kvSet } from "./store";
+import { fetchJson, fetchRaw, downloadBuffer, MEDIA_TIMEOUT_MS } from "./http";
 
 /* ---------------- Config ---------------- */
 
@@ -36,51 +37,55 @@ interface TikTokTokens {
 }
 
 export async function tiktokExchangeCode(code: string): Promise<TikTokTokens> {
-  const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_key: TIKTOK.clientKey,
-      client_secret: TIKTOK.clientSecret,
-      code,
-      grant_type: "authorization_code",
-      redirect_uri: TIKTOK_REDIRECT_URI,
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    throw new Error(data?.error_description || data?.error || "TikTok token-uitwisseling mislukt");
-  }
+  const data = await fetchJson<Partial<TikTokTokens>>(
+    "https://open.tiktokapis.com/v2/oauth/token/",
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_key: TIKTOK.clientKey,
+        client_secret: TIKTOK.clientSecret,
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: TIKTOK_REDIRECT_URI,
+      }),
+    },
+    { label: "TikTok token-uitwisseling" },
+  );
+  if (!data.access_token) throw new Error("TikTok token-uitwisseling mislukt");
   return data as TikTokTokens;
 }
 
 export async function tiktokRefresh(refreshToken: string): Promise<TikTokTokens> {
-  const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_key: TIKTOK.clientKey,
-      client_secret: TIKTOK.clientSecret,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    throw new Error(data?.error_description || "TikTok token-verversing mislukt");
-  }
+  const data = await fetchJson<Partial<TikTokTokens>>(
+    "https://open.tiktokapis.com/v2/oauth/token/",
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_key: TIKTOK.clientKey,
+        client_secret: TIKTOK.clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+    },
+    { label: "TikTok token-verversing" },
+  );
+  if (!data.access_token) throw new Error("TikTok token-verversing mislukt");
   return data as TikTokTokens;
 }
 
 export async function tiktokUserInfo(
   accessToken: string,
+  opts: { timeoutMs?: number; label?: string } = {},
 ): Promise<{ openId: string; displayName: string }> {
-  const res = await fetch(
+  const data = await fetchJson<{
+    data?: { user?: { open_id?: string; display_name?: string } };
+  }>(
     "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
     { headers: { authorization: `Bearer ${accessToken}` } },
+    { label: opts.label || "TikTok-profiel ophalen", timeoutMs: opts.timeoutMs },
   );
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || "TikTok-profiel ophalen mislukt");
   return {
     openId: data?.data?.user?.open_id || "",
     displayName: data?.data?.user?.display_name || "TikTok-account",
@@ -144,25 +149,35 @@ export async function clearTikTokConnection(accountId: string): Promise<void> {
 
 /* ---------------- Video posten (FILE_UPLOAD) ---------------- */
 
+const MB = 1024 * 1024;
+/** TikTok: één chunk tot 64 MB, daarboven chunks van 10 MB (laatste neemt de rest). */
+export function tiktokChunkPlan(size: number): { chunkSize: number; total: number } {
+  const chunkSize = size <= 64 * MB ? size : 10 * MB;
+  const total = Math.max(1, Math.floor(size / chunkSize));
+  return { chunkSize, total };
+}
+
 export async function postToTikTok(
   conn: TikTokConnection,
   videoUrl: string,
   caption: string,
 ): Promise<{ id: string }> {
   // 1. video ophalen (uit onze eigen opslag)
-  const videoRes = await fetch(videoUrl);
-  if (!videoRes.ok) throw new Error("Video kon niet worden opgehaald");
-  const video = Buffer.from(await videoRes.arrayBuffer());
+  const { buffer: video, contentType } = await downloadBuffer(videoUrl, {
+    label: "Video ophalen",
+  });
   const size = video.byteLength;
+  if (!size) throw new Error("Video ophalen: leeg bestand");
+  const { chunkSize, total } = tiktokChunkPlan(size);
 
   // 2. upload initialiseren
-  const initRes = await fetch(
+  const init = await fetchJson<{ data?: { upload_url?: string; publish_id?: string } }>(
     "https://open.tiktokapis.com/v2/post/publish/video/init/",
     {
       method: "POST",
       headers: {
         authorization: `Bearer ${conn.accessToken}`,
-        "content-type": "application/json",
+        "content-type": "application/json; charset=UTF-8",
       },
       body: JSON.stringify({
         post_info: {
@@ -172,27 +187,37 @@ export async function postToTikTok(
         source_info: {
           source: "FILE_UPLOAD",
           video_size: size,
-          chunk_size: size,
-          total_chunk_count: 1,
+          chunk_size: chunkSize,
+          total_chunk_count: total,
         },
       }),
     },
+    { label: "TikTok upload-init" },
   );
-  const init = await initRes.json();
-  if (!initRes.ok || !init?.data?.upload_url) {
-    throw new Error(init?.error?.message || "TikTok upload-init mislukt");
+  const uploadUrl = init.data?.upload_url;
+  const publishId = init.data?.publish_id;
+  if (!uploadUrl || !publishId) throw new Error("TikTok upload-init: geen upload-URL ontvangen");
+
+  // 3. video uploaden, chunk voor chunk
+  for (let i = 0; i < total; i++) {
+    const start = i * chunkSize;
+    const end = i === total - 1 ? size - 1 : start + chunkSize - 1;
+    await fetchRaw(
+      uploadUrl,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": contentType,
+          "content-range": `bytes ${start}-${end}/${size}`,
+        },
+        body: new Uint8Array(video.subarray(start, end + 1)),
+      },
+      {
+        label: total > 1 ? `TikTok video-upload (deel ${i + 1}/${total})` : "TikTok video-upload",
+        timeoutMs: MEDIA_TIMEOUT_MS,
+      },
+    );
   }
 
-  // 3. video uploaden
-  const putRes = await fetch(init.data.upload_url, {
-    method: "PUT",
-    headers: {
-      "content-type": "video/mp4",
-      "content-range": `bytes 0-${size - 1}/${size}`,
-    },
-    body: new Uint8Array(video),
-  });
-  if (!putRes.ok) throw new Error(`TikTok video-upload mislukt (${putRes.status})`);
-
-  return { id: init.data.publish_id };
+  return { id: publishId };
 }

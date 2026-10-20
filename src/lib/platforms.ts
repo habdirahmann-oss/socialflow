@@ -1,6 +1,6 @@
 export type PlatformId = "instagram" | "tiktok" | "facebook" | "youtube";
 
-export type PlacementId = "feed" | "story" | "reel" | "short";
+export type PlacementId = "feed" | "story" | "reel" | "short" | "video";
 
 export interface Platform {
   id: PlatformId;
@@ -24,11 +24,11 @@ export const PLATFORMS: Platform[] = [
     name: "Instagram",
     color: "#E1306C",
     gradient: "linear-gradient(135deg,#f58529,#dd2a7b,#8134af)",
-    blurb: "Feed-post + Story",
+    blurb: "Feed-post / Reel + Story",
     placements: [
       { id: "feed", label: "Feed" },
-      { id: "story", label: "Story" },
       { id: "reel", label: "Reel" },
+      { id: "story", label: "Story" },
     ],
     maxChars: 2200,
     hashtags: 8,
@@ -38,11 +38,8 @@ export const PLATFORMS: Platform[] = [
     name: "TikTok",
     color: "#25F4EE",
     gradient: "linear-gradient(135deg,#25F4EE,#000,#FE2C55)",
-    blurb: "Video + Story",
-    placements: [
-      { id: "feed", label: "Video" },
-      { id: "story", label: "Story" },
-    ],
+    blurb: "Video",
+    placements: [{ id: "feed", label: "Video" }],
     maxChars: 2200,
     hashtags: 6,
   },
@@ -51,11 +48,8 @@ export const PLATFORMS: Platform[] = [
     name: "Facebook",
     color: "#1877F2",
     gradient: "linear-gradient(135deg,#1877F2,#0a3d8f)",
-    blurb: "Pagina-post + Story",
-    placements: [
-      { id: "feed", label: "Post" },
-      { id: "story", label: "Story" },
-    ],
+    blurb: "Pagina-post (tekst, foto of video)",
+    placements: [{ id: "feed", label: "Post" }],
     maxChars: 5000,
     hashtags: 3,
   },
@@ -67,7 +61,7 @@ export const PLATFORMS: Platform[] = [
     blurb: "Short / Video",
     placements: [
       { id: "short", label: "Short" },
-      { id: "feed", label: "Video" },
+      { id: "video", label: "Video" },
     ],
     maxChars: 5000,
     hashtags: 4,

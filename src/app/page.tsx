@@ -10,6 +10,7 @@ import {
 } from "@/lib/platforms";
 import type { CaptionResult, PlatformCaption } from "./api/captions/route";
 import LogoutLink from "@/components/LogoutLink";
+import { channelBlockReason } from "@/lib/targets";
 import { postJson } from "@/lib/client-fetch";
 import {
   ACCEPT,
@@ -101,7 +102,7 @@ export default function Page() {
   const [placements, setPlacements] = useState<Record<string, PlacementId[]>>({
     instagram: ["feed", "story"],
     tiktok: ["feed"],
-    facebook: ["feed", "story"],
+    facebook: ["feed"],
     youtube: ["short"],
   });
   const [captions, setCaptions] = useState<CaptionResult>({});
@@ -453,6 +454,7 @@ export default function Page() {
     try {
       const data = await postJson<{
         results?: { ok: boolean; error?: string; platform?: string }[];
+        dropped?: { platform: string; placement: string; reason: string }[];
         error?: string;
       }>("/api/publish", {
         accountId,
@@ -477,6 +479,11 @@ export default function Page() {
           msg +=
             (msg ? " · " : "") +
             `${failed.length} mislukt: ${failed[0].error ?? ""}`;
+      }
+      if (results.length && data.dropped?.length) {
+        msg += ` · overgeslagen: ${data.dropped
+          .map((d) => `${PLATFORM_MAP[d.platform as PlatformId]?.name ?? d.platform} ${d.placement} (${d.reason})`)
+          .join(", ")}`;
       }
     } catch (e) {
       msg = `Posten mislukt: ${e instanceof Error ? e.message : "onbekende fout"}`;
@@ -691,6 +698,11 @@ export default function Page() {
                         </button>
                         <Switch on={on} onClick={() => togglePlatform(p.id)} />
                       </div>
+                      {on && channelBlockReason(p.id, media?.type) && (
+                        <p className="mt-2 pl-1 text-[11px] text-amber-400">
+                          Wordt overgeslagen: {channelBlockReason(p.id, media?.type)}
+                        </p>
+                      )}
                       {on && (
                         <div className="mt-3 flex flex-wrap gap-1.5 pl-1">
                           {p.placements.map((plc) => {
@@ -1367,6 +1379,7 @@ function PhonePreview({
     placements.includes("feed") ||
     placements.includes("reel") ||
     placements.includes("short") ||
+    placements.includes("video") ||
     placements.length === 0;
 
   return (

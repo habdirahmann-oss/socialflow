@@ -1,5 +1,6 @@
 import { kvGet, kvSet } from "./store";
-import { publishIgMedia } from "./ig-media";
+import { publishIgMedia, type IgPlacement } from "./ig-media";
+import { fetchJson, MEDIA_TIMEOUT_MS } from "./http";
 
 /* ---------------- Config ---------------- */
 
@@ -51,12 +52,13 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
     redirect_uri: META_REDIRECT_URI,
     code,
   });
-  const res = await fetch(graphUrl(`/oauth/access_token?${params}`));
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    throw new Error(data?.error?.message || "Token-uitwisseling mislukt");
-  }
-  return data.access_token as string;
+  const data = await fetchJson<{ access_token?: string }>(
+    graphUrl(`/oauth/access_token?${params}`),
+    {},
+    { label: "Token-uitwisseling" },
+  );
+  if (!data.access_token) throw new Error("Token-uitwisseling mislukt");
+  return data.access_token;
 }
 
 /** Wissel kortlevend token in voor een langlevend token (~60 dagen). */
@@ -67,12 +69,13 @@ export async function getLongLivedToken(shortToken: string): Promise<string> {
     client_secret: META.appSecret,
     fb_exchange_token: shortToken,
   });
-  const res = await fetch(graphUrl(`/oauth/access_token?${params}`));
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    throw new Error(data?.error?.message || "Long-lived token mislukt");
-  }
-  return data.access_token as string;
+  const data = await fetchJson<{ access_token?: string }>(
+    graphUrl(`/oauth/access_token?${params}`),
+    {},
+    { label: "Long-lived token" },
+  );
+  if (!data.access_token) throw new Error("Long-lived token mislukt");
+  return data.access_token;
 }
 
 /* ---------------- Pagina's + Instagram ---------------- */
@@ -85,22 +88,20 @@ export interface MetaPage {
 }
 
 export async function fetchPages(userToken: string): Promise<MetaPage[]> {
-  const fields =
-    "id,name,access_token,instagram_business_account{id,username}";
-  const res = await fetch(
-    graphUrl(`/me/accounts?fields=${fields}&access_token=${userToken}`),
-  );
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error?.message || "Pagina's ophalen mislukt");
-  }
-  return (data.data || []).map(
-    (p: {
+  const params = new URLSearchParams({
+    fields: "id,name,access_token,instagram_business_account{id,username}",
+    access_token: userToken,
+  });
+  const data = await fetchJson<{
+    data?: {
       id: string;
       name: string;
       access_token: string;
       instagram_business_account?: { id: string; username: string };
-    }) => ({
+    }[];
+  }>(graphUrl(`/me/accounts?${params}`), {}, { label: "Pagina's ophalen" });
+  return (data.data || []).map(
+    (p) => ({
       id: p.id,
       name: p.name,
       accessToken: p.access_token,
@@ -191,38 +192,68 @@ export async function postToFacebookPage(
   page: MetaPage,
   message: string,
   media?: { url: string; kind: "image" | "video" },
-): Promise<{ id: string }> {
-  // Video → /videos met file_url
+): Promise<{ id: string; url: string }> {
+  let data: { id?: string; post_id?: string };
   if (media?.kind === "video") {
-    const body = new URLSearchParams({
-      access_token: page.accessToken,
-      file_url: media.url,
-      description: message,
-    });
-    const res = await fetch(graphUrl(`/${page.id}/videos`), {
-      method: "POST",
-      body,
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error?.message || "Facebook-video mislukt");
-    return { id: data.id };
-  }
-
-  // Foto of tekst
-  const endpoint = media?.url
-    ? graphUrl(`/${page.id}/photos`)
-    : graphUrl(`/${page.id}/feed`);
-  const body = new URLSearchParams({ access_token: page.accessToken });
-  if (media?.url) {
-    body.set("url", media.url);
-    body.set("caption", message);
+    // Video → /videos met file_url (Facebook haalt de video zelf op)
+    data = await fetchJson(
+      graphUrl(`/${page.id}/videos`),
+      {
+        method: "POST",
+        body: new URLSearchParams({
+          access_token: page.accessToken,
+          file_url: media.url,
+          description: message,
+        }),
+      },
+      { label: "Facebook-video", timeoutMs: MEDIA_TIMEOUT_MS },
+    );
   } else {
-    body.set("message", message);
+    // Foto of tekst
+    const endpoint = media?.url
+      ? graphUrl(`/${page.id}/photos`)
+      : graphUrl(`/${page.id}/feed`);
+    const body = new URLSearchParams({ access_token: page.accessToken });
+    if (media?.url) {
+      body.set("url", media.url);
+      body.set("caption", message);
+    } else {
+      body.set("message", message);
+    }
+    data = await fetchJson(
+      endpoint,
+      { method: "POST", body },
+      { label: "Facebook-post", timeoutMs: media?.url ? 60_000 : undefined },
+    );
   }
-  const res = await fetch(endpoint, { method: "POST", body });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || "Facebook-post mislukt");
-  return { id: data.id || data.post_id };
+  const postId = data.post_id || data.id;
+  if (!postId) throw new Error("Facebook gaf geen post-id terug");
+  return {
+    id: data.id || postId,
+    url: `https://www.facebook.com/${postId}`,
+  };
+}
+
+/** Lees-only controle (testmodus): werkt het pagina-token nog? */
+export async function checkFacebookPage(page: MetaPage, timeoutMs = 5000): Promise<void> {
+  const params = new URLSearchParams({ fields: "id", access_token: page.accessToken });
+  await fetchJson(graphUrl(`/${page.id}?${params}`), {}, {
+    label: "Facebook-koppeling",
+    timeoutMs,
+  });
+}
+
+/** Lees-only controle (testmodus): kan het pagina-token het IG-account lezen? */
+export async function checkInstagramViaPage(
+  igId: string,
+  pageToken: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const params = new URLSearchParams({ fields: "username", access_token: pageToken });
+  await fetchJson(graphUrl(`/${igId}?${params}`), {}, {
+    label: "Instagram-koppeling",
+    timeoutMs,
+  });
 }
 
 /**
@@ -234,8 +265,8 @@ export async function postToInstagram(
   pageToken: string,
   media: { url: string; kind: "image" | "video" },
   caption: string,
-  placement: "feed" | "story",
-): Promise<{ id: string }> {
+  placement: IgPlacement,
+): Promise<{ id: string; permalink?: string }> {
   return publishIgMedia({
     base: `https://graph.facebook.com/${META.graph}`,
     igId,

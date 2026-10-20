@@ -8,6 +8,7 @@ import {
   type ScheduledPost,
 } from "@/lib/schedule";
 import { resolveMediaInput, type MediaInput } from "@/lib/publish";
+import { normalizeTargets, countTargets } from "@/lib/targets";
 import { accountExists } from "@/lib/accounts";
 import { requireAuth } from "@/lib/auth";
 
@@ -132,6 +133,15 @@ export async function POST(req: Request) {
   }
   const mediaUrl = media?.url;
 
+  // Alleen plaatsingen bewaren die met deze media echt kunnen.
+  const norm = normalizeTargets(targets, media?.type);
+  if (countTargets(norm.targets) === 0) {
+    const why = norm.dropped
+      .map((d) => `${d.platform} ${d.placement} (${d.reason})`)
+      .join(", ");
+    return bad(`Niets om in te plannen met deze media${why ? `: ${why}` : ""}`);
+  }
+
   const post: ScheduledPost = {
     id,
     accountId: body.accountId,
@@ -148,7 +158,7 @@ export async function POST(req: Request) {
       typeof body.subject === "string" && body.subject
         ? body.subject
         : "(zonder onderwerp)",
-    targets,
+    targets: norm.targets,
     captions,
     status: "pending",
     attempts: 0,
@@ -162,6 +172,7 @@ export async function POST(req: Request) {
       ok: true,
       id: saved.id,
       ...(created ? {} : { existing: true }),
+      ...(norm.dropped.length ? { dropped: norm.dropped } : {}),
       post: slim(saved),
     });
   } catch (e) {

@@ -1,5 +1,6 @@
 import { kvGet, kvSet } from "./store";
-import { publishIgMedia } from "./ig-media";
+import { publishIgMedia, type IgPlacement } from "./ig-media";
+import { fetchJson } from "./http";
 
 /* ---------------- Config ---------------- */
 
@@ -46,15 +47,13 @@ export async function igExchangeCode(code: string): Promise<ShortToken> {
     redirect_uri: IG_REDIRECT_URI,
     code: code.replace(/#_$/, ""),
   });
-  const res = await fetch("https://api.instagram.com/oauth/access_token", {
-    method: "POST",
-    body,
-  });
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    throw new Error(data?.error_message || data?.error?.message || "IG token-uitwisseling mislukt");
-  }
-  return { access_token: data.access_token, user_id: data.user_id };
+  const data = await fetchJson<{ access_token?: string; user_id?: number | string }>(
+    "https://api.instagram.com/oauth/access_token",
+    { method: "POST", body },
+    { label: "IG token-uitwisseling" },
+  );
+  if (!data.access_token) throw new Error("IG token-uitwisseling mislukt");
+  return { access_token: data.access_token, user_id: data.user_id ?? "" };
 }
 
 /** Wissel kortlevend token in voor langlevend (~60 dagen). */
@@ -64,25 +63,34 @@ export async function igLongLivedToken(shortToken: string): Promise<string> {
     client_secret: IG.appSecret,
     access_token: shortToken,
   });
-  const res = await fetch(
+  const data = await fetchJson<{ access_token?: string }>(
     `https://graph.instagram.com/access_token?${params}`,
+    {},
+    { label: "IG long-lived token" },
   );
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    throw new Error(data?.error?.message || "IG long-lived token mislukt");
-  }
-  return data.access_token as string;
+  if (!data.access_token) throw new Error("IG long-lived token mislukt");
+  return data.access_token;
 }
 
 export async function igProfile(
   token: string,
 ): Promise<{ id: string; username: string }> {
-  const res = await fetch(
-    `https://graph.instagram.com/me?fields=user_id,username&access_token=${token}`,
+  const params = new URLSearchParams({ fields: "user_id,username", access_token: token });
+  const data = await fetchJson<{ user_id?: string | number; username?: string }>(
+    `https://graph.instagram.com/me?${params}`,
+    {},
+    { label: "IG profiel ophalen" },
   );
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || "IG profiel ophalen mislukt");
-  return { id: String(data.user_id), username: data.username };
+  return { id: String(data.user_id ?? ""), username: data.username ?? "" };
+}
+
+/** Lees-only controle (testmodus): werkt het Instagram-token nog? */
+export async function checkInstagramDirect(token: string, timeoutMs = 5000): Promise<void> {
+  const params = new URLSearchParams({ fields: "username", access_token: token });
+  await fetchJson(`https://graph.instagram.com/me?${params}`, {}, {
+    label: "Instagram-koppeling",
+    timeoutMs,
+  });
 }
 
 /* ---------------- Opslag per account ---------------- */
@@ -125,8 +133,8 @@ export async function postToInstagramDirect(
   conn: IgConnection,
   media: { url: string; kind: "image" | "video" },
   caption: string,
-  placement: "feed" | "story",
-): Promise<{ id: string }> {
+  placement: IgPlacement,
+): Promise<{ id: string; permalink?: string }> {
   return publishIgMedia({
     base: "https://graph.instagram.com",
     igId: conn.igUserId,
