@@ -1,17 +1,24 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
-import { duePosts, updateScheduled } from "@/lib/schedule";
-import { publishForAccount } from "@/lib/publish";
+import { timingSafeEqual, randomUUID } from "crypto";
+import { duePosts, processPost } from "@/lib/schedule";
+import { kvSetNX, kvGet, kvDel, kvSet } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // video's kunnen even duren om te verwerken
+// Vercel Hobby + Fluid Compute staat 300 s toe (projectinstelling: default 300 s).
+export const maxDuration = 300;
+
+const RUN_LOCK = "lock:cron";
+const RUN_LOCK_TTL_SEC = 280;
+/** Max aantal posts per run (video's kunnen lang duren). */
+const MAX_POSTS_PER_RUN = 3;
+/** Na deze tijd pakken we geen nieuwe post meer op. */
+const PICK_WINDOW_MS = 200_000;
 
 /**
- * Verstuurt alle ingeplande posts waarvan de tijd verstreken is.
- * Wordt aangeroepen door Vercel Cron én mag door een externe pinger
- * (cron-job.org) elke minuut worden aangeroepen. Beschermd met CRON_SECRET
- * via de header `Authorization: Bearer <CRON_SECRET>`.
+ * Verstuurt ingeplande posts waarvan de tijd verstreken is.
+ * Aangeroepen door GitHub Actions (elke 5 min) en Vercel Cron (dagelijkse backup).
+ * Beschermd met CRON_SECRET via de header `Authorization: Bearer <CRON_SECRET>`.
  */
 async function run(req: Request) {
   // Fail closed: zonder CRON_SECRET draait er niets.
@@ -28,41 +35,65 @@ async function run(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const now = Date.now();
-  const due = await duePosts(now);
-  const processed: { id: string; ok: boolean }[] = [];
+  const ranAt = Date.now();
+  const token = `${ranAt}-${randomUUID()}`;
+  if (!(await kvSetNX(RUN_LOCK, token, RUN_LOCK_TTL_SEC))) {
+    return NextResponse.json({ ranAt, skipped: "busy" });
+  }
 
-  for (const post of due) {
+  const processed: {
+    id: string;
+    status?: string;
+    attempts?: number;
+    error?: string;
+  }[] = [];
+  try {
+    const tried = new Set<string>();
+    while (
+      processed.length < MAX_POSTS_PER_RUN &&
+      Date.now() - ranAt < PICK_WINDOW_MS
+    ) {
+      const now = Date.now();
+      const next = (await duePosts(now)).find((p) => !tried.has(p.id));
+      if (!next) break;
+      tried.add(next.id);
+      try {
+        const done = await processPost(next.id, now);
+        if (done) {
+          processed.push({
+            id: done.id,
+            status: done.status,
+            attempts: done.attempts,
+          });
+        }
+      } catch (e) {
+        processed.push({
+          id: next.id,
+          error: e instanceof Error ? e.message : "cron-fout",
+        });
+      }
+    }
+    await kvSet("cron-last-run", { ranAt, processed }).catch(() => {});
+  } finally {
+    // Alleen onze eigen lock vrijgeven.
     try {
-      const out = await publishForAccount({
-        accountId: post.accountId,
-        mediaUrl: post.mediaUrl,
-        mediaType: post.mediaType,
-        targets: post.targets,
-        captions: post.captions,
-      });
-      await updateScheduled(post.id, {
-        status: out.ok ? "posted" : "failed",
-        results: out.results,
-      });
-      processed.push({ id: post.id, ok: out.ok });
-    } catch (e) {
-      await updateScheduled(post.id, {
-        status: "failed",
-        results: [
-          {
-            platform: "-",
-            placement: "-",
-            ok: false,
-            error: e instanceof Error ? e.message : "cron-fout",
-          },
-        ],
-      });
-      processed.push({ id: post.id, ok: false });
+      const cur = await readLockValue();
+      if (cur == null || String(cur) === token) await kvDel(RUN_LOCK);
+    } catch {
+      // lock verloopt vanzelf (TTL)
     }
   }
 
-  return NextResponse.json({ ranAt: now, processed });
+  return NextResponse.json({ ranAt, processed });
+}
+
+async function readLockValue(): Promise<unknown> {
+  const raw = await kvGet<unknown>(RUN_LOCK);
+  // Lokaal (.data) staat de waarde in { value, expiresAt }.
+  if (raw && typeof raw === "object" && "value" in raw) {
+    return (raw as { value: unknown }).value;
+  }
+  return raw;
 }
 
 export const GET = run;

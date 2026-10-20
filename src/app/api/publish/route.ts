@@ -8,7 +8,7 @@ import {
 import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // video's kunnen even duren om te verwerken
+export const maxDuration = 300; // video's kunnen even duren (Hobby + Fluid Compute: max 300 s)
 
 interface PublishBody {
   accountId: string;

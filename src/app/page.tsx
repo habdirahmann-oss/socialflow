@@ -51,8 +51,22 @@ interface ServerPost {
   thumb?: string;
   subject: string;
   targets: Record<string, string[]>;
-  status: "pending" | "posted" | "failed";
+  status: "pending" | "processing" | "posted" | "partial" | "failed";
   results?: { platform: string; placement: string; ok: boolean; error?: string }[];
+  attempts?: number;
+  nextAttemptAt?: number;
+  lastError?: string;
+  dryRun?: boolean;
+}
+
+/** Huidige lokale tijd in het formaat van <input type="datetime-local">. */
+function localDateTimeMin(): string {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
 }
 
 /* ---------------- Page ---------------- */
@@ -292,6 +306,8 @@ export default function Page() {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
+            // client-id → dubbel klikken / opnieuw versturen maakt geen tweede post
+            id: crypto.randomUUID(),
             accountId,
             accountName: currentAccount?.name,
             scheduledFor: ts,
@@ -303,7 +319,15 @@ export default function Page() {
         });
         const data = await res.json();
         if (data.ok) {
-          showToast("🗓️ Post ingepland — wordt automatisch geplaatst");
+          const when = new Date(ts).toLocaleString("nl-NL", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+          showToast(
+            `Ingepland voor ${when} — wordt binnen ~5 minuten na dat tijdstip geplaatst`,
+          );
           loadSchedule();
         } else {
           showToast(data.error || "Inplannen mislukt");
@@ -377,7 +401,11 @@ export default function Page() {
   const cancelScheduled = async (id: string) => {
     setServerPosts((s) => s.filter((p) => p.id !== id));
     try {
-      await fetch(`/api/schedule?id=${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/schedule?id=${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || "Annuleren mislukt");
+      }
     } catch {}
     loadSchedule();
   };
@@ -679,6 +707,7 @@ export default function Page() {
                     {schedule === "later" && (
                       <input
                         type="datetime-local"
+                        min={localDateTimeMin()}
                         value={scheduleAt}
                         onChange={(e) => setScheduleAt(e.target.value)}
                         className="rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-sm outline-none focus:border-brand"
@@ -801,11 +830,20 @@ export default function Page() {
                                 )}
                               </span>
                             </div>
-                            {failed.length > 0 && (
-                              <p className="mt-1 truncate text-[11px] text-red-400">
-                                {failed[0].error}
-                              </p>
-                            )}
+                            {p.status !== "posted" &&
+                              (p.lastError || failed.length > 0) && (
+                                <p className="mt-1 truncate text-[11px] text-red-400">
+                                  {p.lastError || failed[0].error}
+                                  {p.status === "pending" &&
+                                    p.nextAttemptAt &&
+                                    ` — nieuwe poging rond ${new Date(
+                                      p.nextAttemptAt,
+                                    ).toLocaleTimeString("nl-NL", {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })} (poging ${(p.attempts ?? 0) + 1}/3)`}
+                                </p>
+                              )}
                           </div>
                           <span
                             className={`rounded-full px-2.5 py-1 text-[11px] ${
@@ -813,14 +851,23 @@ export default function Page() {
                                 ? "bg-accent/15 text-accent"
                                 : p.status === "failed"
                                   ? "bg-red-500/15 text-red-400"
-                                  : "bg-brand/15 text-brand"
+                                  : p.status === "partial"
+                                    ? "bg-amber-500/15 text-amber-400"
+                                    : "bg-brand/15 text-brand"
                             }`}
                           >
+                            {p.dryRun ? "🧪 " : ""}
                             {p.status === "posted"
                               ? "gepost"
                               : p.status === "failed"
                                 ? "mislukt"
-                                : "gepland"}
+                                : p.status === "partial"
+                                  ? "deels gepost"
+                                  : p.status === "processing"
+                                    ? "bezig…"
+                                    : (p.attempts ?? 0) > 0
+                                      ? "opnieuw gepland"
+                                      : "gepland"}
                           </span>
                           {p.status === "pending" && (
                             <button

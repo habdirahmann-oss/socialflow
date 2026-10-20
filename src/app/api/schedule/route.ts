@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import {
   listScheduled,
+  getScheduled,
   addScheduled,
   removeScheduled,
   type ScheduledPost,
@@ -13,21 +14,24 @@ import { requireAuth } from "@/lib/auth";
 export const runtime = "nodejs";
 
 interface ScheduleBody {
-  accountId: string;
-  accountName?: string;
-  scheduledFor: number;
+  id?: unknown;
+  accountId?: unknown;
+  accountName?: unknown;
+  scheduledFor?: unknown;
   media?: { dataUrl: string; type: "image" | "video" } | null;
-  subject?: string;
-  targets: ScheduledPost["targets"];
-  captions: ScheduledPost["captions"];
+  subject?: unknown;
+  targets?: unknown;
+  captions?: unknown;
+  dryRun?: unknown;
 }
 
-export async function GET(req: Request) {
-  const denied = await requireAuth(req);
-  if (denied) return denied;
-  const posts = await listScheduled();
-  // stuur geen zware velden mee die de UI niet nodig heeft
-  const slim = posts.map((p) => ({
+const PLATFORMS = new Set(["facebook", "instagram", "tiktok", "youtube"]);
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Lichte versie voor de UI (geen captions/zware velden). */
+function slim(p: ScheduledPost) {
+  return {
     id: p.id,
     accountName: p.accountName,
     scheduledFor: p.scheduledFor,
@@ -36,8 +40,40 @@ export async function GET(req: Request) {
     targets: p.targets,
     status: p.status,
     results: p.results,
-  }));
-  return NextResponse.json({ posts: slim });
+    attempts: p.attempts,
+    nextAttemptAt: p.nextAttemptAt,
+    lastError: p.lastError,
+    dryRun: p.dryRun,
+    updatedAt: p.updatedAt,
+  };
+}
+
+function bad(error: string) {
+  return NextResponse.json({ error }, { status: 400 });
+}
+
+/** Geldige targets: object met bekende platformen → arrays van strings, minstens één plek. */
+function parseTargets(t: unknown): ScheduledPost["targets"] | null {
+  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  const out: Record<string, string[]> = {};
+  let count = 0;
+  for (const [k, v] of Object.entries(t as Record<string, unknown>)) {
+    if (!PLATFORMS.has(k)) return null;
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.length > 0)) {
+      return null;
+    }
+    const uniq = [...new Set(v as string[])];
+    if (uniq.length) out[k] = uniq;
+    count += uniq.length;
+  }
+  return count > 0 ? (out as ScheduledPost["targets"]) : null;
+}
+
+export async function GET(req: Request) {
+  const denied = await requireAuth(req);
+  if (denied) return denied;
+  const posts = await listScheduled();
+  return NextResponse.json({ posts: posts.map(slim) });
 }
 
 export async function POST(req: Request) {
@@ -47,50 +83,110 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Ongeldige aanvraag" }, { status: 400 });
+    return bad("Ongeldige aanvraag");
   }
-  if (!body.accountId || !(await accountExists(body.accountId))) {
-    return NextResponse.json({ error: "Onbekend account" }, { status: 400 });
+  if (!body || typeof body !== "object") return bad("Ongeldige aanvraag");
+
+  // Idempotentie: client-id dat al bestaat → bestaande post teruggeven.
+  let id: string = randomUUID();
+  if (body.id !== undefined) {
+    if (typeof body.id !== "string" || !UUID_RE.test(body.id)) {
+      return bad("Ongeldig id");
+    }
+    id = body.id.toLowerCase();
+    const existing = await getScheduled(id);
+    if (existing) {
+      return NextResponse.json({ ok: true, id, existing: true, post: slim(existing) });
+    }
   }
-  if (!body.scheduledFor) {
-    return NextResponse.json({ error: "Geen tijdstip" }, { status: 400 });
+
+  const now = Date.now();
+  const scheduledFor = body.scheduledFor;
+  if (typeof scheduledFor !== "number" || !Number.isFinite(scheduledFor)) {
+    return bad("Ongeldig tijdstip");
   }
+  if (scheduledFor < now - 60_000) {
+    return bad("Kies een tijdstip in de toekomst");
+  }
+  if (typeof body.accountId !== "string" || !(await accountExists(body.accountId))) {
+    return bad("Onbekend account");
+  }
+  const targets = parseTargets(body.targets);
+  if (!targets) return bad("Kies minstens één kanaal");
+  if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") {
+    return bad("Ongeldige testmodus-waarde");
+  }
+  const captions =
+    body.captions && typeof body.captions === "object" && !Array.isArray(body.captions)
+      ? (body.captions as ScheduledPost["captions"])
+      : {};
 
   let mediaUrl: string | undefined;
   if (body.media?.dataUrl) {
     try {
       mediaUrl = await resolveMediaUrl(body.media.dataUrl);
     } catch (e) {
-      return NextResponse.json(
-        { error: e instanceof Error ? e.message : "Media opslaan mislukt" },
-        { status: 400 },
-      );
+      return bad(e instanceof Error ? e.message : "Media opslaan mislukt");
     }
   }
 
   const post: ScheduledPost = {
-    id: randomUUID(),
+    id,
     accountId: body.accountId,
-    accountName: body.accountName || "account",
-    scheduledFor: body.scheduledFor,
+    accountName:
+      typeof body.accountName === "string" && body.accountName
+        ? body.accountName
+        : "account",
+    scheduledFor,
     mediaUrl,
-    mediaType: body.media?.type,
+    mediaType: body.media?.type === "image" ? "image" : body.media ? "video" : undefined,
     thumb: mediaUrl,
-    subject: body.subject || "(zonder onderwerp)",
-    targets: body.targets,
-    captions: body.captions,
+    subject:
+      typeof body.subject === "string" && body.subject
+        ? body.subject
+        : "(zonder onderwerp)",
+    targets,
+    captions,
     status: "pending",
-    createdAt: Date.now(),
+    attempts: 0,
+    createdAt: now,
+    updatedAt: now,
+    ...(body.dryRun === true ? { dryRun: true } : {}),
   };
-  await addScheduled(post);
-  return NextResponse.json({ ok: true, id: post.id });
+  try {
+    const { post: saved, created } = await addScheduled(post);
+    return NextResponse.json({
+      ok: true,
+      id: saved.id,
+      ...(created ? {} : { existing: true }),
+      post: slim(saved),
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Opslaan mislukt" },
+      { status: 503 },
+    );
+  }
 }
 
 export async function DELETE(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   const id = new URL(req.url).searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "id ontbreekt" }, { status: 400 });
-  await removeScheduled(id);
-  return NextResponse.json({ ok: true });
+  if (!id) return bad("id ontbreekt");
+  try {
+    const res = await removeScheduled(id);
+    if (res === "processing") {
+      return NextResponse.json(
+        { error: "Deze post wordt nu geplaatst" },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ ok: true, removed: res === "removed" });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Verwijderen mislukt" },
+      { status: 503 },
+    );
+  }
 }
