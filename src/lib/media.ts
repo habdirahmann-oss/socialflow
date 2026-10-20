@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { put } from "@vercel/blob";
+import { APP_URL } from "./config";
 
 const MEDIA_DIR = path.join(process.cwd(), ".data", "media");
 
@@ -16,11 +17,8 @@ export const useBlob = Boolean(
     process.env.VERCEL, // draait op Vercel: schijf is read-only
 );
 
-/** Publieke basis-URL van de app (zonder slash op het eind). */
-export const APP_URL = (process.env.APP_URL || "http://localhost:3000").replace(
-  /\/+$/,
-  "",
-);
+/** Publieke basis-URL van de app (zonder slash op het eind); zie config.ts. */
+export { APP_URL };
 
 /** Toegestane uploadtypes → extensie. Instagram wil JPEG; PNG wordt client-side omgezet. */
 export const UPLOAD_MIME: Record<string, string> = {

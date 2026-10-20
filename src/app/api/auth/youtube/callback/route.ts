@@ -1,35 +1,32 @@
-import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import {
   youtubeExchangeCode,
   youtubeChannel,
   saveYouTubeConnection,
   peekYouTubeConnection,
-  YT,
 } from "@/lib/youtube";
+import {
+  accountFromCallback,
+  backToVerbindingen,
+  INVALID_STATE_REASON,
+} from "@/lib/oauth-state";
 
 export const runtime = "nodejs";
 
-function accountFromState(state: string | null): string | null {
-  if (!state) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
-    return typeof parsed.a === "string" ? parsed.a : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
-  const accountId = accountFromState(url.searchParams.get("state"));
-  const back = (qs: string) =>
-    `${YT.appUrl}/verbindingen${accountId ? `?account=${accountId}&` : "?"}${qs}`;
 
-  if (error) return NextResponse.redirect(back(`yt=error&reden=${encodeURIComponent(error)}`));
-  if (!code) return NextResponse.redirect(back("yt=error&reden=geen_code"));
-  if (!accountId) return NextResponse.redirect(`${YT.appUrl}/verbindingen?yt=error&reden=geen_account`);
+  const accountId = await accountFromCallback(req, "youtube");
+  if (!accountId) {
+    return backToVerbindingen("youtube", "error", { reden: INVALID_STATE_REASON });
+  }
+  const back = (status: string, reden?: string) =>
+    backToVerbindingen("youtube", status, { accountId, reden });
+
+  if (error) return back("error", error);
+  if (!code) return back("error", "geen_code");
 
   try {
     const tokens = await youtubeExchangeCode(code);
@@ -46,9 +43,9 @@ export async function GET(req: Request) {
       channelTitle: channel.title,
       obtainedAt: Date.now(),
     });
-    return NextResponse.redirect(back("yt=ok"));
+    return back("ok");
   } catch (e) {
     const msg = e instanceof Error ? e.message : "onbekende fout";
-    return NextResponse.redirect(back(`yt=error&reden=${encodeURIComponent(msg)}`));
+    return back("error", msg);
   }
 }

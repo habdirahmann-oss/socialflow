@@ -1,11 +1,16 @@
-import { NextResponse } from "next/server";
-import { igConfigured, igLoginUrl, IG } from "@/lib/instagram";
+import { NextResponse, type NextRequest } from "next/server";
+import { igConfigured, igLoginUrl } from "@/lib/instagram";
 import { accountExists } from "@/lib/accounts";
 import { requireAuth } from "@/lib/auth";
+import { makeState, setStateCookie, verbindingenUrl } from "@/lib/oauth-state";
 
 export const runtime = "nodejs";
 
-export async function GET(req: Request) {
+/**
+ * Start de Instagram-koppeling: ondertekende state (account + nonce) mee naar
+ * Instagram; de nonce gaat ook in een httpOnly-cookie die de callback controleert.
+ */
+export async function GET(req: NextRequest) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   if (!igConfigured()) {
@@ -16,10 +21,10 @@ export async function GET(req: Request) {
   }
   const accountId = new URL(req.url).searchParams.get("account") || "";
   if (!accountId || !(await accountExists(accountId))) {
-    return NextResponse.redirect(`${IG.appUrl}/verbindingen?ig=error&reden=geen_account`);
+    return NextResponse.redirect(verbindingenUrl("instagram", "error", { reden: "geen_account" }));
   }
-  const state = Buffer.from(
-    JSON.stringify({ a: accountId, t: Date.now() }),
-  ).toString("base64url");
-  return NextResponse.redirect(igLoginUrl(state));
+  const { state, nonce } = makeState(accountId, "instagram");
+  const res = NextResponse.redirect(igLoginUrl(state));
+  setStateCookie(res, "instagram", nonce);
+  return res;
 }

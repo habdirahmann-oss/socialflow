@@ -1,4 +1,5 @@
 import { kvGet, kvSet, kvUpdate, withLock } from "./store";
+import { APP_URL } from "./config";
 import { fetchJson, downloadBuffer, MEDIA_TIMEOUT_MS, HttpError } from "./http";
 import {
   REFRESH_LOCK,
@@ -14,7 +15,7 @@ import {
 export const YT = {
   clientId: process.env.GOOGLE_CLIENT_ID || "",
   clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-  appUrl: process.env.APP_URL || "http://localhost:3000",
+  appUrl: APP_URL,
 };
 
 export const YT_REDIRECT_URI = `${YT.appUrl}/api/auth/youtube/callback`;

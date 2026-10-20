@@ -1,4 +1,5 @@
 import { kvGet, kvSet, kvUpdate, withLock } from "./store";
+import { APP_URL } from "./config";
 import { publishIgMedia, type IgPlacement } from "./ig-media";
 import { fetchJson } from "./http";
 import {
@@ -17,7 +18,7 @@ import {
 export const IG = {
   appId: process.env.INSTAGRAM_APP_ID || "",
   appSecret: process.env.INSTAGRAM_APP_SECRET || "",
-  appUrl: process.env.APP_URL || "http://localhost:3000",
+  appUrl: APP_URL,
 };
 
 export const IG_REDIRECT_URI = `${IG.appUrl}/api/auth/instagram/callback`;

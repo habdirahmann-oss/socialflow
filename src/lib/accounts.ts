@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { kvGet, kvSet } from "./store";
+import { kvGet, kvSet, kvUpdate } from "./store";
 
 export interface Account {
   id: string;
@@ -8,6 +8,17 @@ export interface Account {
 }
 
 const KEY = "accounts";
+
+/** Maximaal aantal klantaccounts (server-side afgedwongen). */
+export const MAX_ACCOUNTS = 10;
+export const MAX_ACCOUNTS_ERROR = "Maximaal 10 klantaccounts";
+
+export class AccountLimitError extends Error {
+  constructor() {
+    super(MAX_ACCOUNTS_ERROR);
+    this.name = "AccountLimitError";
+  }
+}
 
 async function read(): Promise<Account[]> {
   return (await kvGet<Account[]>(KEY)) ?? [];
@@ -27,16 +38,22 @@ export async function listAccounts(): Promise<Account[]> {
   return accounts;
 }
 
+/** Maakt een account aan; gooit AccountLimitError bij meer dan MAX_ACCOUNTS. */
 export async function createAccount(name: string): Promise<Account> {
-  const accounts = await read();
-  const account: Account = {
-    id: randomUUID(),
-    name: name.trim() || `Account ${accounts.length + 1}`,
-    createdAt: Date.now(),
-  };
-  accounts.push(account);
-  await write(accounts);
-  return account;
+  let account: Account | undefined;
+  // onder lock, zodat twee gelijktijdige aanvragen de limiet niet omzeilen
+  await kvUpdate<Account[]>(KEY, (cur) => {
+    const accounts = Array.isArray(cur) ? cur : [];
+    if (accounts.length >= MAX_ACCOUNTS) throw new AccountLimitError();
+    account = {
+      id: randomUUID(),
+      name: name.trim().slice(0, 80) || `Account ${accounts.length + 1}`,
+      createdAt: Date.now(),
+    };
+    accounts.push(account);
+    return accounts;
+  });
+  return account!;
 }
 
 export async function renameAccount(
@@ -52,8 +69,9 @@ export async function renameAccount(
 }
 
 export async function deleteAccount(id: string): Promise<void> {
-  const accounts = await read();
-  await write(accounts.filter((x) => x.id !== id));
+  await kvUpdate<Account[]>(KEY, (cur) =>
+    (Array.isArray(cur) ? cur : []).filter((x) => x.id !== id),
+  );
 }
 
 export async function accountExists(id: string): Promise<boolean> {

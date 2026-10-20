@@ -159,6 +159,30 @@ export async function removeScheduledPost(
   });
 }
 
+/** Aantal posts per account dat nog wacht ('pending'). */
+export async function pendingCountByAccount(): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const p of await readAll()) {
+    if (p.status === "pending") out[p.accountId] = (out[p.accountId] || 0) + 1;
+  }
+  return out;
+}
+
+/**
+ * Annuleert (verwijdert) alle wachtende posts van een account, bv. bij het
+ * verwijderen van dat account. Posts die nu geplaatst worden en de
+ * geschiedenis blijven staan. Geeft de verwijderde posts terug.
+ */
+export async function cancelPendingForAccount(accountId: string): Promise<ScheduledPost[]> {
+  return mutate<ScheduledPost[]>((all) => {
+    const removed = all.filter((p) => p.accountId === accountId && p.status === "pending");
+    if (!removed.length) return { save: false, result: [] };
+    const keep = all.filter((p) => !(p.accountId === accountId && p.status === "pending"));
+    all.splice(0, all.length, ...keep);
+    return { save: true, result: removed };
+  });
+}
+
 export interface ScheduledPatch {
   scheduledFor?: number;
   captions?: PublishCaptions;

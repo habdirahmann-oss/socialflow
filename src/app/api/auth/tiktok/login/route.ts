@@ -1,11 +1,16 @@
-import { NextResponse } from "next/server";
-import { tiktokConfigured, tiktokLoginUrl, TIKTOK } from "@/lib/tiktok";
+import { NextResponse, type NextRequest } from "next/server";
+import { tiktokConfigured, tiktokLoginUrl } from "@/lib/tiktok";
 import { accountExists } from "@/lib/accounts";
 import { requireAuth } from "@/lib/auth";
+import { makeState, setStateCookie, verbindingenUrl } from "@/lib/oauth-state";
 
 export const runtime = "nodejs";
 
-export async function GET(req: Request) {
+/**
+ * Start de TikTok-koppeling: ondertekende state (account + nonce) mee naar
+ * TikTok; de nonce gaat ook in een httpOnly-cookie die de callback controleert.
+ */
+export async function GET(req: NextRequest) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   if (!tiktokConfigured()) {
@@ -16,10 +21,10 @@ export async function GET(req: Request) {
   }
   const accountId = new URL(req.url).searchParams.get("account") || "";
   if (!accountId || !(await accountExists(accountId))) {
-    return NextResponse.redirect(`${TIKTOK.appUrl}/verbindingen?tt=error&reden=geen_account`);
+    return NextResponse.redirect(verbindingenUrl("tiktok", "error", { reden: "geen_account" }));
   }
-  const state = Buffer.from(
-    JSON.stringify({ a: accountId, t: Date.now() }),
-  ).toString("base64url");
-  return NextResponse.redirect(tiktokLoginUrl(state));
+  const { state, nonce } = makeState(accountId, "tiktok");
+  const res = NextResponse.redirect(tiktokLoginUrl(state));
+  setStateCookie(res, "tiktok", nonce);
+  return res;
 }

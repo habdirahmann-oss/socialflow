@@ -6,6 +6,9 @@ import {
   checkFacebookPage,
   checkInstagramViaPage,
   markMetaNeedsReauth,
+  needsPageChoice,
+  PAGE_CHOICE_REQUIRED,
+  META,
 } from "./meta";
 import {
   loadIgConnection,
@@ -17,12 +20,7 @@ import {
 import { expiredMessage, errorText, isMetaTokenError } from "./token-status";
 import { loadTikTokConnection, postToTikTok, tiktokUserInfo } from "./tiktok";
 import { loadYouTubeConnection, postToYouTube, checkYouTube } from "./youtube";
-import {
-  saveDataUrl,
-  validateDataUrl,
-  isAllowedMediaUrl,
-  APP_URL,
-} from "./media";
+import { saveDataUrl, validateDataUrl, isAllowedMediaUrl } from "./media";
 import {
   normalizeTargets,
   fullText,
@@ -96,7 +94,7 @@ export async function resolveMediaInput(
       return { url: "dry-run://media", type };
     }
     const saved = await saveDataUrl(media.dataUrl);
-    return { url: saved.url || `${APP_URL}/api/media/${saved.id}`, type };
+    return { url: saved.url || `${META.appUrl}/api/media/${saved.id}`, type };
   }
   return undefined;
 }
@@ -144,6 +142,8 @@ export async function publishForAccount(opts: {
     loadYouTubeConnection(accountId),
   ]);
   const page = activePage(store);
+  /** Nieuwe Meta-koppeling met meerdere pagina's en nog geen keuze. */
+  const pageChoice = needsPageChoice(store);
 
   if (!page && !igConn && !ttConn && !ytConn) {
     return {
@@ -151,7 +151,7 @@ export async function publishForAccount(opts: {
       allOk: false,
       results: [],
       dropped,
-      error: "Dit account is nog niet verbonden",
+      error: pageChoice ? PAGE_CHOICE_REQUIRED : "Dit account is nog niet verbonden",
     };
   }
   const total = Object.values(targets).reduce((n, v) => n + (v?.length || 0), 0);
@@ -263,7 +263,7 @@ export async function publishForAccount(opts: {
       "facebook",
       targets.facebook,
       () => {
-        if (!page) return "Geen Facebook-pagina verbonden";
+        if (!page) return pageChoice ? PAGE_CHOICE_REQUIRED : "Geen Facebook-pagina verbonden";
         if (metaDead) return expiredMessage("Facebook");
         return null;
       },
@@ -281,7 +281,9 @@ export async function publishForAccount(opts: {
       "instagram",
       targets.instagram,
       () => {
-        if (!igConn && !igId) return "Geen Instagram-account gekoppeld";
+        if (!igConn && !igId) {
+          return pageChoice ? PAGE_CHOICE_REQUIRED : "Geen Instagram-account gekoppeld";
+        }
         // IG-login verlopen en geen bruikbare pagina-Instagram, of alleen het
         // pagina-pad en dat is verlopen
         const directOk = Boolean(igConn && !igDirectDead);

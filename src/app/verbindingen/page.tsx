@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense, useCallback } from "react";
+import { useEffect, useState, Suspense, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PLATFORM_MAP } from "@/lib/platforms";
@@ -28,12 +28,43 @@ interface AccountState {
   facebook: boolean;
   instagram: boolean;
   pages: { id: string; name: string; instagram: string | null }[];
+  /** Pagina waarmee dit account nu post (null = nog kiezen). */
   selectedPageId: string | null;
+  /** Nieuwe koppeling met meerdere pagina's zonder keuze: posten geblokkeerd. */
+  pageChoiceRequired?: boolean;
+  /** Oude koppeling die stil op de eerste pagina terugvalt. */
+  implicitPage?: boolean;
+  /** Via welke route Instagram publiceert. */
+  igPublishVia?: { username: string; route: "login" | "page" } | null;
+  /** Aantal wachtende geplande posts. */
+  pendingPosts?: number;
   connectedAt: number | null;
   igLogin: { username: string } | null;
   tiktok: { displayName: string } | null;
   youtube: { channelTitle: string } | null;
   health?: AccountHealth;
+}
+
+/** Vaste Nederlandse teksten voor bekende `reden`-waarden uit de callbacks. */
+const REDEN_NL: Record<string, string> = {
+  geen_account: "account niet gevonden — start het koppelen opnieuw vanaf deze pagina",
+  geen_code: "geen autorisatiecode ontvangen — probeer het opnieuw",
+  "Ongeldige of verlopen koppelpoging":
+    "ongeldige of verlopen koppelpoging — start het koppelen opnieuw vanaf deze pagina en rond het binnen 10 minuten af",
+  access_denied: "je hebt de toestemming geweigerd",
+  user_denied: "je hebt de toestemming geweigerd",
+  "Permissions error": "je hebt de toestemming geweigerd",
+  "The user denied your request.": "je hebt de toestemming geweigerd",
+  "Token-uitwisseling mislukt": "token-uitwisseling mislukt — probeer opnieuw te verbinden",
+};
+
+function redenText(reden: string | null): string | null {
+  if (!reden) return null;
+  return REDEN_NL[reden] ?? reden;
+}
+
+function postsText(n: number): string {
+  return `${n} geplande ${n === 1 ? "post" : "posts"}`;
 }
 
 export default function VerbindingenPage() {
@@ -52,36 +83,79 @@ function Inner() {
   const [igConfigured, setIgConfigured] = useState(true);
   const [ttConfigured, setTtConfigured] = useState(false);
   const [ytConfigured, setYtConfigured] = useState(false);
+  const [appUrl, setAppUrl] = useState<string | null>(null);
+  const [maxAccounts, setMaxAccounts] = useState(10);
+  const [addError, setAddError] = useState<string | null>(null);
+  /** Net aangemaakt account: scrollen + oplichten. */
+  const [newId, setNewId] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const metaResult = params.get("meta");
   const igResult = params.get("ig");
   const ttResult = params.get("tt");
   const ytResult = params.get("yt");
-  const reden = params.get("reden");
+  const reden = redenText(params.get("reden"));
   const activeAccount = params.get("account");
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/accounts");
-      const data = await res.json();
-      setAccounts(data.accounts || []);
-      setConfigured(data.configured);
-      setIgConfigured(data.igConfigured);
-      setTtConfigured(data.tiktokConfigured);
-      setYtConfigured(data.youtubeConfigured);
-    } catch {}
-  }, []);
+  const load = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let ignore = false;
+    fetch("/api/accounts")
+      .then((res) => res.json())
+      .then((data) => {
+        if (ignore || !data || !Array.isArray(data.accounts)) return;
+        setAccounts(data.accounts);
+        setConfigured(data.configured);
+        setIgConfigured(data.igConfigured);
+        setTtConfigured(data.tiktokConfigured);
+        setYtConfigured(data.youtubeConfigured);
+        setAppUrl(typeof data.appUrl === "string" ? data.appUrl : null);
+        if (typeof data.maxAccounts === "number") setMaxAccounts(data.maxAccounts);
+      })
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
+  }, [reloadKey]);
+
+  // Nieuw account in beeld scrollen zodra het in de lijst staat.
+  useEffect(() => {
+    if (!newId || !accounts.some((a) => a.id === newId)) return;
+    document
+      .getElementById(`account-${newId}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [newId, accounts]);
+
+  /** Per pagina-id: welke accounts posten ermee (voor de dubbel-waarschuwing). */
+  const pageUsers = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const a of accounts) {
+      if (!a.selectedPageId) continue;
+      m.set(a.selectedPageId, [...(m.get(a.selectedPageId) || []), a.id]);
+    }
+    return m;
+  }, [accounts]);
+
+  const atMax = accounts.length >= maxAccounts;
 
   const addAccount = async () => {
-    await fetch("/api/accounts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: newName }),
-    });
-    setNewName("");
+    setAddError(null);
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setAddError(data?.error || `Account aanmaken mislukt (HTTP ${res.status})`);
+        return;
+      }
+      setNewName("");
+      if (data?.id) setNewId(data.id);
+    } catch {
+      setAddError("Geen verbinding met de server");
+    }
     load();
   };
 
@@ -94,25 +168,42 @@ function Inner() {
     load();
   };
 
-  const removeAccount = async (id: string) => {
-    await fetch(`/api/accounts?id=${id}`, { method: "DELETE" });
+  const removeAccount = async (a: AccountState) => {
+    const n = a.pendingPosts || 0;
+    const ok = window.confirm(
+      `Account "${a.name}" verwijderen?\n\nAlle koppelingen van dit account worden ontkoppeld` +
+        (n > 0
+          ? ` en ${postsText(n)} ${n === 1 ? "wordt" : "worden"} geannuleerd.`
+          : ". Er staan geen geplande posts klaar.") +
+        "\n\nDit kan niet ongedaan worden gemaakt.",
+    );
+    if (!ok) return;
+    await fetch(`/api/accounts?id=${encodeURIComponent(a.id)}`, { method: "DELETE" });
     load();
   };
 
-  const disconnect = async (id: string) => {
-    await fetch(`/api/connections?account=${id}`, { method: "DELETE" });
-    load();
+  const CONNECTION_LABEL: Record<string, string> = {
+    meta: "Facebook + Instagram (Meta)",
+    ig: "Instagram (losse login)",
+    tiktok: "TikTok",
+    youtube: "YouTube",
   };
 
-  const disconnectIg = async (id: string) => {
-    await fetch(`/api/connections?account=${id}&type=ig`, { method: "DELETE" });
-    load();
-  };
-
-  const disconnectType = async (id: string, type: string) => {
-    await fetch(`/api/connections?account=${id}&type=${type}`, {
-      method: "DELETE",
-    });
+  /** Ontkoppel één koppeling (type = meta | ig | tiktok | youtube), na bevestiging. */
+  const disconnectType = async (a: AccountState, type: string) => {
+    const n = a.pendingPosts || 0;
+    const label = CONNECTION_LABEL[type] ?? type;
+    const ok = window.confirm(
+      `${label} ontkoppelen van "${a.name}"?` +
+        (n > 0
+          ? `\n\nLet op: dit account heeft ${postsText(n)}. Die kunnen niet naar ${label} geplaatst worden zolang je niet opnieuw koppelt.`
+          : "\n\nEr staan geen geplande posts klaar voor dit account."),
+    );
+    if (!ok) return;
+    await fetch(
+      `/api/connections?account=${encodeURIComponent(a.id)}&type=${encodeURIComponent(type)}`,
+      { method: "DELETE" },
+    );
     load();
   };
 
@@ -158,8 +249,9 @@ function Inner() {
       <main className="mx-auto max-w-4xl px-4 pb-24 pt-8">
         <h2 className="text-2xl font-bold">Accounts &amp; verbindingen</h2>
         <p className="mt-2 max-w-2xl text-sm text-muted">
-          Beheer meerdere accounts (bijv. per merk of klant). Elk account heeft
-          z&apos;n eigen koppelingen met Facebook, Instagram en TikTok.
+          Beheer meerdere accounts (bijv. per merk of klant, maximaal{" "}
+          {maxAccounts}). Elk account heeft z&apos;n eigen koppelingen met
+          Facebook, Instagram, TikTok en YouTube.
         </p>
 
         {metaResult === "ok" && (
@@ -167,9 +259,16 @@ function Inner() {
             ✓ Koppeling gelukt! De accounts staan hieronder bijgewerkt.
           </div>
         )}
+        {metaResult === "kies_pagina" && (
+          <div className="mt-5 rounded-xl border border-orange-400/40 bg-orange-400/10 px-4 py-3 text-sm text-orange-300">
+            ⚠ Facebook is gekoppeld, maar je hebt toegang tot meerdere
+            pagina&apos;s. Kies hieronder bij het account met welke pagina het
+            post — tot die tijd wordt er niets naar Facebook/Instagram geplaatst.
+          </div>
+        )}
         {metaResult === "error" && (
           <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            ✕ Koppelen mislukt{reden ? `: ${reden}` : ""}. Controleer de
+            ✕ Koppelen mislukt{reden ? `: ${reden}` : ""}. Controleer ook de
             redirect-URI en je rechten in de Meta-app.
           </div>
         )}
@@ -215,17 +314,24 @@ function Inner() {
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addAccount()}
+            onKeyDown={(e) => e.key === "Enter" && !atMax && addAccount()}
             placeholder="Naam nieuw account (bijv. 'Mijn merk' of 'Klant X')"
-            className="flex-1 rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 text-sm outline-none placeholder:text-muted focus:border-brand"
+            disabled={atMax}
+            className="flex-1 rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 text-sm outline-none placeholder:text-muted focus:border-brand disabled:opacity-50"
           />
           <button
             onClick={addAccount}
-            className="rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-black transition hover:brightness-110"
+            disabled={atMax}
+            className="rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             + Account
           </button>
         </div>
+        {(addError || atMax) && (
+          <p className={`mt-2 text-xs ${addError ? "text-red-300" : "text-muted"}`}>
+            {addError ?? `Maximaal ${maxAccounts} klantaccounts bereikt.`}
+          </p>
+        )}
 
         {/* accounts */}
         <div className="mt-6 flex flex-col gap-5">
@@ -237,12 +343,14 @@ function Inner() {
               igConfigured={igConfigured}
               ttConfigured={ttConfigured}
               ytConfigured={ytConfigured}
-              highlight={a.id === activeAccount}
+              redirectUri={`${appUrl ?? (typeof window !== "undefined" ? window.location.origin : "")}/api/auth/meta/callback`}
+              highlight={a.id === activeAccount || a.id === newId}
+              samePageAccounts={(a.selectedPageId ? pageUsers.get(a.selectedPageId) ?? [] : [])
+                .filter((id) => id !== a.id)
+                .map((id) => accounts.find((x) => x.id === id)?.name ?? "ander account")}
               onRename={(name) => rename(a.id, name)}
-              onRemove={() => removeAccount(a.id)}
-              onDisconnect={() => disconnect(a.id)}
-              onDisconnectIg={() => disconnectIg(a.id)}
-              onDisconnectType={(t) => disconnectType(a.id, t)}
+              onRemove={() => removeAccount(a)}
+              onDisconnectType={(t) => disconnectType(a, t)}
               onSelectPage={(pageId) => selectPage(a.id, pageId)}
               canRemove={accounts.length > 1}
             />
@@ -259,11 +367,11 @@ function AccountCard({
   igConfigured,
   ttConfigured,
   ytConfigured,
+  redirectUri,
   highlight,
+  samePageAccounts,
   onRename,
   onRemove,
-  onDisconnect,
-  onDisconnectIg,
   onDisconnectType,
   onSelectPage,
   canRemove,
@@ -273,11 +381,12 @@ function AccountCard({
   igConfigured: boolean;
   ttConfigured: boolean;
   ytConfigured: boolean;
+  redirectUri: string;
   highlight: boolean;
+  /** Namen van andere accounts die met dezelfde Facebook-pagina posten. */
+  samePageAccounts: string[];
   onRename: (name: string) => void;
   onRemove: () => void;
-  onDisconnect: () => void;
-  onDisconnectIg: () => void;
   onDisconnectType: (type: string) => void;
   onSelectPage: (pageId: string) => void;
   canRemove: boolean;
@@ -287,15 +396,16 @@ function AccountCard({
   const fb = PLATFORM_MAP.facebook;
   const ig = PLATFORM_MAP.instagram;
   const tt = PLATFORM_MAP.tiktok;
-  // de pagina waarmee dit account daadwerkelijk post
-  const activePage =
-    account.pages.find((p) => p.id === account.selectedPageId) ??
-    account.pages[0];
+  // de pagina waarmee dit account daadwerkelijk post (server bepaalt dit)
+  const activePage = account.pages.find((p) => p.id === account.selectedPageId);
+  // Expliciete keuze nodig (nieuwe koppeling) of aan te raden (oude koppeling)?
+  const needsChoice = Boolean(account.pageChoiceRequired || account.implicitPage);
 
   return (
     <section
-      className={`rounded-2xl border bg-surface p-5 transition ${
-        highlight ? "border-brand" : "border-border"
+      id={`account-${account.id}`}
+      className={`scroll-mt-24 rounded-2xl border bg-surface p-5 transition ${
+        highlight ? "border-brand ring-2 ring-brand/40" : "border-border"
       }`}
     >
       {/* account header */}
@@ -376,10 +486,15 @@ function AccountCard({
                     Posten vanaf deze pagina
                   </label>
                   <select
-                    value={activePage?.id ?? ""}
-                    onChange={(e) => onSelectPage(e.target.value)}
-                    className="w-full rounded-lg border border-border bg-surface-2/50 px-2 py-1.5 text-[13px] outline-none focus:border-brand"
+                    value={needsChoice ? "" : (activePage?.id ?? "")}
+                    onChange={(e) => e.target.value && onSelectPage(e.target.value)}
+                    className={`w-full rounded-lg border bg-surface-2/50 px-2 py-1.5 text-[13px] outline-none focus:border-brand ${
+                      needsChoice ? "border-orange-400/60" : "border-border"
+                    }`}
                   >
+                    <option value="" disabled>
+                      Kies pagina…
+                    </option>
                     {account.pages.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
@@ -406,19 +521,52 @@ function AccountCard({
                   )}
                 </>
               )}
-              {account.pages.length > 1 && activePage && (
+              {account.pageChoiceRequired && (
+                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-300">
+                  ⚠ Kies een pagina — tot die tijd wordt er niets naar Facebook
+                  of Instagram (via de pagina) geplaatst.
+                </p>
+              )}
+              {account.implicitPage && activePage && (
+                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-300">
+                  ⚠ Kies expliciet een pagina — nu wordt automatisch de eerste
+                  gebruikt ({activePage.name}).
+                </p>
+              )}
+              {account.pages.length > 1 && activePage && !account.implicitPage && (
                 <p className="mt-1.5 text-[11px] text-accent">
                   {activePage.instagram
                     ? `✓ post naar ${activePage.name} + @${activePage.instagram}`
                     : `✓ post naar ${activePage.name} (geen Instagram gekoppeld)`}
                 </p>
               )}
+              {activePage && samePageAccounts.length > 0 && (
+                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-300">
+                  ⚠ Let op: {activePage.name} is ook gekozen bij{" "}
+                  {samePageAccounts.join(", ")}. Posts van beide accounts komen
+                  op dezelfde pagina.
+                </p>
+              )}
             </div>
+          )}
+
+          {account.igPublishVia && (
+            <p className="mt-2 text-[11px] text-muted">
+              Instagram post via:{" "}
+              <strong className="text-foreground/90">@{account.igPublishVia.username}</strong>{" "}
+              {account.igPublishVia.route === "login" ? "(losse login)" : "(via Facebook-pagina)"}
+            </p>
           )}
 
           {account.facebook && <HealthLine health={account.health?.facebook} />}
 
-          <div className="mt-3 flex flex-wrap items-center gap-3">
+          {configured && (
+            <p className="mt-3 text-[11px] text-orange-300/90">
+              💡 Laat bij inloggen ALLE klantpagina&apos;s aangevinkt — anders
+              verdwijnen pagina&apos;s bij andere accounts.
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-3">
             {configured ? (
               <a
                 href={`/api/auth/meta/login?account=${account.id}`}
@@ -431,7 +579,7 @@ function AccountCard({
             )}
             {(account.facebook || account.instagram) && (
               <button
-                onClick={onDisconnect}
+                onClick={() => onDisconnectType("meta")}
                 className="text-sm text-muted transition hover:text-red-400"
               >
                 Ontkoppelen
@@ -484,7 +632,7 @@ function AccountCard({
             )}
             {account.igLogin && (
               <button
-                onClick={onDisconnectIg}
+                onClick={() => onDisconnectType("ig")}
                 className="text-sm text-muted transition hover:text-red-400"
               >
                 Ontkoppelen
@@ -590,14 +738,14 @@ function AccountCard({
         </div>
       </div>
 
-      {activePage === undefined && (
+      {account.pages.length === 0 && (
         <details className="mt-3 rounded-xl border border-border bg-surface-2/20 p-3">
           <summary className="cursor-pointer text-[13px] font-medium text-muted">
             📋 Wat moet er eenmalig in de Meta-app staan?
           </summary>
           <ol className="mt-2 flex flex-col gap-1.5 pl-1 text-[13px]">
             {[
-              "Facebook Login → Settings → Valid OAuth Redirect URIs: http://localhost:3000/api/auth/meta/callback",
+              `Facebook Login → Settings → Valid OAuth Redirect URIs: ${redirectUri}`,
               "Instagram = Business/Creator-account, gekoppeld aan je Facebook-pagina",
               "App in 'Development' mode en jij bent admin (geen review nodig voor eigen accounts)",
             ].map((s, i) => (

@@ -1,4 +1,5 @@
 import { kvGet, kvSet, kvUpdate, withLock } from "./store";
+import { APP_URL } from "./config";
 import { fetchJson, fetchRaw, downloadBuffer, MEDIA_TIMEOUT_MS, HttpError } from "./http";
 import {
   REFRESH_LOCK,
@@ -14,7 +15,7 @@ import {
 export const TIKTOK = {
   clientKey: process.env.TIKTOK_CLIENT_KEY || "",
   clientSecret: process.env.TIKTOK_CLIENT_SECRET || "",
-  appUrl: process.env.APP_URL || "http://localhost:3000",
+  appUrl: APP_URL,
 };
 
 export const TIKTOK_REDIRECT_URI = `${TIKTOK.appUrl}/api/auth/tiktok/callback`;

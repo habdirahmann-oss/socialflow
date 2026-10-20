@@ -1,4 +1,5 @@
 import { kvGet, kvUpdate } from "./store";
+import { APP_URL } from "./config";
 import { publishIgMedia, type IgPlacement } from "./ig-media";
 import { fetchJson, MEDIA_TIMEOUT_MS } from "./http";
 import {
@@ -17,7 +18,7 @@ export const META = {
   // v21.0 t/m v24.0 zijn (okt 2026) deprecated: Meta upgradet die calls automatisch
   // naar v25.0 (header x-ad-api-version-warning). META_GRAPH_VERSION blijft een override.
   graph: process.env.META_GRAPH_VERSION || "v25.0",
-  appUrl: process.env.APP_URL || "http://localhost:3000",
+  appUrl: APP_URL,
 };
 
 export const META_REDIRECT_URI = `${META.appUrl}/api/auth/meta/callback`;
@@ -110,32 +111,87 @@ export interface MetaPage {
   checkedAt?: number;
 }
 
+interface PagesResponse {
+  data?: {
+    id: string;
+    name: string;
+    access_token: string;
+    instagram_business_account?: { id: string; username: string };
+  }[];
+  paging?: { next?: string };
+}
+
+/** Max. aantal vervolgpagina's (à 100) dat we volgen. */
+const MAX_PAGE_REQUESTS = 10;
+
+/**
+ * Alle Facebook-pagina's waar de gebruiker bij inloggen toegang toe gaf
+ * (limit=100, volgt paging.next). Het token gaat via URLSearchParams mee.
+ */
 export async function fetchPages(userToken: string): Promise<MetaPage[]> {
   const params = new URLSearchParams({
     fields: "id,name,access_token,instagram_business_account{id,username}",
+    limit: "100",
     access_token: userToken,
   });
-  const data = await fetchJson<{
-    data?: {
-      id: string;
-      name: string;
-      access_token: string;
-      instagram_business_account?: { id: string; username: string };
-    }[];
-  }>(graphUrl(`/me/accounts?${params}`), {}, { label: "Pagina's ophalen" });
-  return (data.data || []).map(
-    (p) => ({
-      id: p.id,
-      name: p.name,
-      accessToken: p.access_token,
-      instagram: p.instagram_business_account
-        ? {
-            id: p.instagram_business_account.id,
-            username: p.instagram_business_account.username,
-          }
-        : undefined,
-    }),
-  );
+  const graphBase = `https://graph.facebook.com/`;
+  const out: MetaPage[] = [];
+  const seen = new Set<string>();
+  let url: string | undefined = graphUrl(`/me/accounts?${params}`);
+  for (let i = 0; url && i < MAX_PAGE_REQUESTS; i++) {
+    const data: PagesResponse = await fetchJson<PagesResponse>(url, {}, {
+      label: "Pagina's ophalen",
+    });
+    for (const p of data.data || []) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push({
+        id: p.id,
+        name: p.name,
+        accessToken: p.access_token,
+        instagram: p.instagram_business_account
+          ? {
+              id: p.instagram_business_account.id,
+              username: p.instagram_business_account.username,
+            }
+          : undefined,
+      });
+    }
+    const next = data.paging?.next;
+    // Alleen vervolg-URL's van de Graph API zelf volgen.
+    url = next && next.startsWith(graphBase) && data.data?.length ? next : undefined;
+  }
+  return out;
+}
+
+/** Rechten die nodig zijn om te kunnen posten; geweigerd → koppeling afwijzen. */
+export const REQUIRED_META_PERMISSIONS = [
+  "pages_manage_posts",
+  "instagram_content_publish",
+];
+
+/**
+ * Lees-only: GET /me/permissions. Geeft de vereiste rechten terug die NIET
+ * verleend zijn (geweigerd/verlopen of ontbrekend). `null` als de lijst niet
+ * op te halen was — dan blokkeren we niet.
+ */
+export async function missingMetaPermissions(userToken: string): Promise<string[] | null> {
+  const params = new URLSearchParams({ access_token: userToken, limit: "100" });
+  try {
+    const data = await fetchJson<{ data?: { permission: string; status: string }[] }>(
+      graphUrl(`/me/permissions?${params}`),
+      {},
+      { label: "Rechten controleren", timeoutMs: 8000 },
+    );
+    const list = data.data || [];
+    if (!list.length) return null;
+    const granted = new Set(
+      list.filter((x) => x.status === "granted").map((x) => x.permission),
+    );
+    return REQUIRED_META_PERMISSIONS.filter((p) => !granted.has(p));
+  } catch {
+    return null;
+  }
 }
 
 /* ---------------- Token-opslag (lokaal JSON-bestand) ---------------- */
@@ -144,24 +200,53 @@ export interface MetaStore extends TokenHealthFields {
   userToken: string;
   pages: MetaPage[];
   obtainedAt: number;
-  /** Welke pagina dit account gebruikt om te posten. Leeg = de eerste. */
+  /** Welke pagina dit account gebruikt om te posten. */
   selectedPageId?: string;
+  /**
+   * Gezet bij koppelingen via de (nieuwe) callback: dan postten we alleen naar
+   * een expliciet gekozen pagina (of de enige). Oude koppelingen zonder deze
+   * vlag vallen terug op de eerste pagina, zodat die blijven werken.
+   */
+  explicitPageRequired?: boolean;
   /** Verloopmoment van het langlevende user-token (ms), uit expires_in. */
   userTokenExpiresAt?: number;
   // expiresAt (TokenHealthFields) = eerstvolgende relevante verloopdatum van de
   // actieve pagina (pagina-token of data access), gezet na een debug_token-check.
 }
 
+/** Melding als er (nog) geen pagina gekozen is. */
+export const PAGE_CHOICE_REQUIRED = "Kies eerst een Facebook-pagina op Verbindingen";
+
 /**
  * De pagina waarmee dit account post. Facebook geeft alle pagina's terug waar je
  * toegang toe hebt, dus zonder expliciete keuze zou een account naar de verkeerde
- * pagina kunnen posten. Valt terug op de eerste pagina.
+ * pagina kunnen posten.
+ * - Gekozen pagina (selectedPageId) bestaat → die.
+ * - Nieuwe koppeling (explicitPageRequired): alleen als er precies 1 pagina is.
+ * - Oude koppeling zonder vlag: de eerste pagina (ongewijzigd gedrag).
  */
 export function activePage(store: MetaStore | null): MetaPage | undefined {
   if (!store) return undefined;
-  return (
-    store.pages.find((p) => p.id === store.selectedPageId) ?? store.pages[0]
-  );
+  const chosen = store.pages.find((p) => p.id === store.selectedPageId);
+  if (chosen) return chosen;
+  if (store.explicitPageRequired) {
+    return store.pages.length === 1 ? store.pages[0] : undefined;
+  }
+  return store.pages[0];
+}
+
+/** Er zijn pagina's, maar er moet er eerst één gekozen worden. */
+export function needsPageChoice(store: MetaStore | null): boolean {
+  return Boolean(store && store.pages.length > 0 && !activePage(store));
+}
+
+/**
+ * Oude koppeling die stilzwijgend op de eerste pagina terugvalt terwijl er
+ * meerdere zijn → UI toont 'Kies expliciet een pagina'.
+ */
+export function implicitPageFallback(store: MetaStore | null): boolean {
+  if (!store || store.pages.length <= 1) return false;
+  return !store.pages.some((p) => p.id === store.selectedPageId);
 }
 
 /** Tokens per account-id: { [accountId]: MetaStore }. */

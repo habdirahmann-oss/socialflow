@@ -62,10 +62,16 @@ export const LS_ACCOUNT_KEY = "socialflow.accountId";
 /** Kanaalvolgorde in de UI. */
 export const CHANNEL_ORDER: PlatformId[] = PLATFORMS.map((p) => p.id);
 
-/** Actieve Facebook-pagina van het account (gekozen pagina, anders de eerste). */
+/**
+ * Actieve Facebook-pagina van het account. De server geeft in selectedPageId
+ * de pagina waarmee echt gepost wordt (null = er moet nog een gekozen worden).
+ */
 function activePageOf(acc?: AccountInfo) {
   if (!acc?.pages?.length) return undefined;
-  return acc.pages.find((p) => p.id === acc.selectedPageId) ?? acc.pages[0];
+  return (
+    acc.pages.find((p) => p.id === acc.selectedPageId) ??
+    (acc.pages.length === 1 ? acc.pages[0] : undefined)
+  );
 }
 
 export function isConnected(acc: AccountInfo | undefined, pid: PlatformId): boolean {

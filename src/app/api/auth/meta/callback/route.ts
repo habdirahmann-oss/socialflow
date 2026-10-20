@@ -1,69 +1,76 @@
-import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import {
   exchangeCodeForToken,
   getLongLivedToken,
   fetchPages,
+  missingMetaPermissions,
   saveMetaStore,
   loadMetaStore,
   checkMetaTokenHealth,
-  META,
 } from "@/lib/meta";
+import {
+  accountFromCallback,
+  backToVerbindingen,
+  INVALID_STATE_REASON,
+} from "@/lib/oauth-state";
 
 export const runtime = "nodejs";
 
-function accountFromState(state: string | null): string | null {
-  if (!state) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
-    return typeof parsed.a === "string" ? parsed.a : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const error =
     url.searchParams.get("error_description") || url.searchParams.get("error");
-  const accountId = accountFromState(url.searchParams.get("state"));
-  const base = META.appUrl;
-  const back = (qs: string) =>
-    `${base}/verbindingen${accountId ? `?account=${accountId}&` : "?"}${qs}`;
 
-  if (error) {
-    return NextResponse.redirect(back(`meta=error&reden=${encodeURIComponent(error)}`));
-  }
-  if (!code) {
-    return NextResponse.redirect(back("meta=error&reden=geen_code"));
-  }
+  // Eerst de state: zonder geldige (ondertekende + cookie) state geen enkele schrijfactie.
+  const accountId = await accountFromCallback(req, "meta");
   if (!accountId) {
-    return NextResponse.redirect(`${base}/verbindingen?meta=error&reden=geen_account`);
+    return backToVerbindingen("meta", "error", { reden: INVALID_STATE_REASON });
   }
+  const back = (status: string, reden?: string) =>
+    backToVerbindingen("meta", status, { accountId, reden });
+
+  if (error) return back("error", error);
+  if (!code) return back("error", "geen_code");
 
   try {
     const shortToken = await exchangeCodeForToken(code);
     const long = await getLongLivedToken(shortToken);
+
+    // Lees-only: zijn de rechten om te posten verleend?
+    const missing = await missingMetaPermissions(long.token);
+    if (missing?.length) {
+      return back("error", `Toestemming geweigerd: ${missing.join(", ")}`);
+    }
+
     const pages = await fetchPages(long.token);
-    // behoud de eerder gekozen pagina als die er nog is
+    if (pages.length === 0) {
+      return back("error", "Geen pagina's gedeeld: kies bij inloggen je pagina('s)");
+    }
+
+    // Behoud de eerder gekozen pagina als die er nog is; bij precies één
+    // pagina is de keuze vanzelfsprekend.
     const prev = await loadMetaStore(accountId);
     const keep =
       prev?.selectedPageId && pages.some((p) => p.id === prev.selectedPageId)
         ? prev.selectedPageId
-        : undefined;
+        : pages.length === 1
+          ? pages[0].id
+          : undefined;
     await saveMetaStore(accountId, {
       userToken: long.token,
       userTokenExpiresAt: long.expiresAt,
       pages,
       obtainedAt: Date.now(),
       selectedPageId: keep,
+      explicitPageRequired: true,
       status: "ok",
     });
     // Lees-only debug_token: verloopdata van de gekozen pagina opslaan.
-    await checkMetaTokenHealth(accountId, { force: true }).catch(() => {});
-    return NextResponse.redirect(back("meta=ok"));
+    if (keep) await checkMetaTokenHealth(accountId, { force: true }).catch(() => {});
+    return back(keep ? "ok" : "kies_pagina");
   } catch (e) {
     const msg = e instanceof Error ? e.message : "onbekende fout";
-    return NextResponse.redirect(back(`meta=error&reden=${encodeURIComponent(msg)}`));
+    return back("error", msg);
   }
 }

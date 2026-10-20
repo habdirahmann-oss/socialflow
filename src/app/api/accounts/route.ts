@@ -4,17 +4,23 @@ import {
   createAccount,
   renameAccount,
   deleteAccount,
+  AccountLimitError,
+  MAX_ACCOUNTS,
+  MAX_ACCOUNTS_ERROR,
 } from "@/lib/accounts";
 import {
   loadMetaStore,
   clearMetaStore,
   metaConfigured,
   activePage,
+  needsPageChoice,
+  implicitPageFallback,
 } from "@/lib/meta";
 import {
   loadIgConnection,
   clearIgConnection,
   igConfigured,
+  igNeedsReauth,
 } from "@/lib/instagram";
 import {
   loadTikTokConnection,
@@ -28,6 +34,8 @@ import {
 } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
 import { accountHealth } from "@/lib/token-health";
+import { cancelPendingForAccount, pendingCountByAccount } from "@/lib/schedule";
+import { APP_URL } from "@/lib/config";
 
 export const runtime = "nodejs";
 
@@ -39,6 +47,9 @@ export async function GET(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   const accounts = await listAccounts();
+  const pendingByAccount = await pendingCountByAccount().catch(
+    () => ({}) as Record<string, number>,
+  );
   const enriched = await Promise.all(
     accounts.map(async (a) => {
       // eerst de health-check (ververst/controleert en slaat status op), dan lezen
@@ -55,12 +66,29 @@ export async function GET(req: Request) {
         instagram: p.instagram?.username || null,
       }));
       const active = activePage(store);
+      // Welke Instagram-route publish gebruikt: eerst de losse IG-login (als
+      // die geldig is), anders de Instagram van de gekozen Facebook-pagina.
+      const igPublishVia =
+        ig && !igNeedsReauth(ig)
+          ? { username: ig.username, route: "login" as const }
+          : active?.instagram
+            ? { username: active.instagram.username, route: "page" as const }
+            : ig
+              ? { username: ig.username, route: "login" as const }
+              : null;
       return {
         ...a,
         facebook: pages.length > 0,
         instagram: Boolean(active?.instagram),
         pages,
+        /** De pagina waarmee dit account nu post (null = nog kiezen). */
         selectedPageId: active?.id ?? null,
+        /** Nieuwe koppeling met meerdere pagina's zonder keuze → posten geblokkeerd. */
+        pageChoiceRequired: needsPageChoice(store),
+        /** Oude koppeling die stil op de eerste pagina terugvalt. */
+        implicitPage: implicitPageFallback(store),
+        igPublishVia,
+        pendingPosts: pendingByAccount[a.id] || 0,
         connectedAt: store?.obtainedAt || null,
         igLogin: ig ? { username: ig.username } : null,
         tiktok: tt ? { displayName: tt.displayName } : null,
@@ -74,6 +102,8 @@ export async function GET(req: Request) {
     igConfigured: igConfigured(),
     tiktokConfigured: tiktokConfigured(),
     youtubeConfigured: youtubeConfigured(),
+    appUrl: APP_URL,
+    maxAccounts: MAX_ACCOUNTS,
     accounts: enriched,
   });
 }
@@ -82,8 +112,18 @@ export async function POST(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
   const { name } = await req.json().catch(() => ({ name: "" }));
-  const account = await createAccount(name || "");
-  return NextResponse.json(account);
+  try {
+    const account = await createAccount(typeof name === "string" ? name : "");
+    return NextResponse.json(account);
+  } catch (e) {
+    if (e instanceof AccountLimitError) {
+      return NextResponse.json({ error: MAX_ACCOUNTS_ERROR }, { status: 400 });
+    }
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Account aanmaken mislukt" },
+      { status: 503 },
+    );
+  }
 }
 
 export async function PATCH(req: Request) {
@@ -100,10 +140,12 @@ export async function DELETE(req: Request) {
   if (denied) return denied;
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id ontbreekt" }, { status: 400 });
+  // eerst de wachtende posts annuleren, anders zou de cron ze nog proberen
+  const cancelled = await cancelPendingForAccount(id);
   await clearMetaStore(id); // tokens opruimen
   await clearIgConnection(id);
   await clearTikTokConnection(id);
   await clearYouTubeConnection(id);
   await deleteAccount(id);
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, cancelledPosts: cancelled.length });
 }
