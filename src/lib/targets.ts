@@ -52,7 +52,7 @@ export function channelBlockReason(
     case "instagram":
       return mediaKind ? null : REASON.needsMedia;
     case "tiktok":
-      return mediaKind ? null : REASON.needsVideo;
+      return mediaKind ? null : REASON.needsMedia;
     case "youtube":
       if (!mediaKind) return REASON.needsVideo;
       if (mediaKind === "image") return REASON.videoOnly;

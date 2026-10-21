@@ -1219,8 +1219,6 @@ export default function Page() {
                               ))}
                             </div>
                           )}
-                          {p.id === "facebook" && <PlacementChip active>Post</PlacementChip>}
-                          {p.id === "tiktok" && <PlacementChip active>Video</PlacementChip>}
                         </div>
                       )}
 
