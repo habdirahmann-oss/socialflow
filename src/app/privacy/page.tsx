@@ -61,7 +61,7 @@ export default function PrivacyPage() {
           <h2 className="mb-2 text-lg font-semibold">5. Verwijdering</h2>
           <p>
             Je kunt een koppeling op elk moment ontkoppelen in de app
-            (&quot;Verbindingen&quot;); bijbehorende tokens worden dan verwijderd. Voor
+            (&quot;Kanalen&quot;); bijbehorende tokens worden dan verwijderd. Voor
             volledige verwijdering van je gegevens mail je{" "}
             <a className="underline" href="mailto:hassan@mooremultimedia.nl">
               hassan@mooremultimedia.nl

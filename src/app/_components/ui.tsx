@@ -1,5 +1,4 @@
-import AppNav from "@/components/AppNav";
-import { PLATFORMS, PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
+import { PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
 import type { PostView } from "@/lib/post-view";
 
 /** Laatste geschiedenis-tijdstip: direct = aangemaakt, gepland = laatst bijgewerkt. */
@@ -10,10 +9,10 @@ export function historyTime(p: PostView): number {
 
 const STATUS_NL: Record<PostView["status"], { label: string; cls: string }> = {
   pending: { label: "gepland", cls: "bg-brand/15 text-brand" },
-  processing: { label: "bezig", cls: "bg-sky-500/15 text-sky-300" },
+  processing: { label: "bezig", cls: "bg-sky-500/15 text-sky-700" },
   posted: { label: "gepost", cls: "bg-accent/15 text-accent" },
-  partial: { label: "gedeeltelijk", cls: "bg-amber-500/15 text-amber-400" },
-  failed: { label: "mislukt", cls: "bg-red-500/15 text-red-400" },
+  partial: { label: "gedeeltelijk", cls: "bg-amber-500/15 text-amber-700" },
+  failed: { label: "mislukt", cls: "bg-red-500/15 text-red-600" },
 };
 
 export function MiniPost({
@@ -66,13 +65,13 @@ export function MiniPost({
           </span>
         </div>
         {p.status === "processing" && p.source === "direct" ? (
-          <p className="mt-0.5 truncate text-[11px] text-sky-300">
+          <p className="mt-0.5 truncate text-[11px] text-sky-700">
             Bezig / onbekend — controleer het kanaal
           </p>
         ) : (
           p.status !== "posted" &&
           (p.lastError || failed.length > 0) && (
-            <p className="mt-0.5 truncate text-[11px] text-red-400">
+            <p className="mt-0.5 truncate text-[11px] text-red-600">
               {p.lastError || failed[0].error}
             </p>
           )
@@ -85,7 +84,7 @@ export function MiniPost({
       {onCancel && (
         <button
           onClick={onCancel}
-          className="text-muted transition hover:text-red-400"
+          className="text-muted transition hover:text-red-600"
           title="Annuleren"
         >
           ✕
@@ -95,61 +94,22 @@ export function MiniPost({
   );
 }
 
-export function Header({
-  connected,
-  accountName,
-}: {
-  /** aantal GEKOPPELDE kanalen van het gekozen account */
-  connected: number;
-  accountName?: string;
-}) {
-  return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-2.5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="SocialFlow" className="h-9 w-9 rounded-xl" />
-          <div>
-            <h1 className="text-base font-bold leading-none">SocialFlow</h1>
-            <p className="text-[11px] text-muted">één post · alle kanalen</p>
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="hidden items-center gap-2 sm:flex">
-            {PLATFORMS.map((p) => (
-              <PlatformBadge key={p.id} id={p.id} small />
-            ))}
-          </div>
-          <span className="hidden rounded-full border border-border px-3 py-1 text-xs text-muted lg:block">
-            {accountName ? `${accountName} · ` : ""}
-            {connected} gekoppeld
-          </span>
-          <AppNav active="/" />
-        </div>
-      </div>
-    </header>
-  );
-}
-
 export function Card({
   children,
   title,
-  step,
+  hint,
 }: {
   children: React.ReactNode;
   title: string;
-  step?: number;
+  /** Kleine grijze toevoeging naast de titel (bv. 'optioneel'). */
+  hint?: string;
 }) {
   return (
-    <section className="rounded-2xl border border-border bg-surface p-4">
-      <div className="mb-3 flex items-center gap-2">
-        {step !== undefined && (
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand/20 text-[11px] font-bold text-brand">
-            {step}
-          </span>
-        )}
-        <h2 className="text-sm font-semibold">{title}</h2>
-      </div>
+    <section className="card p-5">
+      <h2 className="mb-3 text-sm font-semibold">
+        {title}
+        {hint && <span className="ml-1.5 font-normal text-muted">{hint}</span>}
+      </h2>
       {children}
     </section>
   );
@@ -238,13 +198,15 @@ export function Spinner() {
 
 export function EmptyState() {
   return (
-    <div className="flex h-full min-h-[400px] flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-surface/40 p-8 text-center">
-      <div className="mb-4 text-5xl">🪄</div>
-      <h3 className="text-lg font-semibold">Je previews verschijnen hier</h3>
+    <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-brand/10 text-xl">
+        ✨
+      </div>
+      <h3 className="text-base font-semibold">Hier zie je je post</h3>
       <p className="mt-2 max-w-xs text-sm text-muted">
-        Kies je account, leg je media klaar en klik op{" "}
-        <span className="text-foreground">Genereer captions</span>. De AI maakt
-        per platform een passende tekst — die je hier live ziet.
+        Kies je media en kanalen en klik op{" "}
+        <span className="font-medium text-foreground">Schrijf captions met AI</span>. Je ziet
+        dan per kanaal een preview die je nog kunt aanpassen.
       </p>
     </div>
   );

@@ -1,15 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0b0c10;
-  --surface: #15171f;
-  --surface-2: #1d2030;
-  --border: #2a2e42;
-  --foreground: #eef0f7;
-  --muted: #9aa0b4;
-  --brand: #6d5efc;
-  --brand-2: #b14bff;
-  --accent: #2ec97b;
+  /* Licht, rustig thema (Buffer/Metricool-stijl) */
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --border: #e4e7ec;
+  --foreground: #101828;
+  --muted: #667085;
+  --brand: #2c4bff;
+  --brand-2: #4f6bff;
+  --accent: #079455;
 }
 
 @theme inline {
@@ -47,7 +48,7 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: #d0d5dd;
   border-radius: 8px;
 }
 ::-webkit-scrollbar-track {
@@ -57,4 +58,18 @@ body {
 textarea,
 input {
   font-family: inherit;
+}
+
+/* Kaarten: wit met een zachte schaduw */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+select,
+input,
+textarea {
+  color: var(--foreground);
 }

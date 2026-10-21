@@ -92,14 +92,14 @@ function LoginForm() {
             className="rounded-lg border border-border bg-surface-2 px-3 py-2.5 text-sm outline-none transition focus:border-accent"
           />
           {error && (
-            <p role="alert" className="text-sm text-red-400">
+            <p role="alert" className="text-sm text-red-600">
               {error}
             </p>
           )}
           <button
             type="submit"
             disabled={busy}
-            className="mt-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-60"
+            className="mt-1 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:opacity-60"
           >
             {busy ? "Bezig…" : "Inloggen"}
           </button>

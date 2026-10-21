@@ -45,14 +45,12 @@ import {
 import {
   Card,
   EmptyState,
-  Header,
-  MiniPost,
   PlatformBadge,
   SegBtn,
   Spinner,
   Switch,
-  historyTime,
 } from "./_components/ui";
+import AppShell from "@/components/AppShell";
 import { CaptionEditor, PhonePreview } from "./_components/previews";
 import { ConfirmModal, type ModalMode, type ModalState } from "./_components/ConfirmModal";
 import { ResultPanel, type ResultPanelState } from "./_components/ResultPanel";
@@ -113,10 +111,6 @@ export default function Page() {
   const [dryRun, setDryRun] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null);
   const [result, setResult] = useState<ResultPanelState | null>(null);
-  const [upcoming, setUpcoming] = useState<PostView[]>([]);
-  const [recent, setRecent] = useState<PostView[]>([]);
-  const [overviewKey, setOverviewKey] = useState(0);
-  const reloadOverview = () => setOverviewKey((k) => k + 1);
 
   /* ---------------- Kanalen & plaatsingen ---------------- */
   // Gekozen kanalen. Alle wijzigingen gaan via commitSelected, zodat handlers
@@ -264,39 +258,6 @@ export default function Page() {
     () => (healthNow ? healthWarnings(currentAccount, healthNow) : []),
     [currentAccount, healthNow],
   );
-
-  /* overzicht voor het GEKOZEN account: volgende 5 geplande + laatste 5 uit de geschiedenis */
-  useEffect(() => {
-    if (!accountId) return;
-    let cancelled = false;
-    const q = `accountId=${encodeURIComponent(accountId)}`;
-    Promise.all([
-      postJson<{ posts?: PostView[] }>(`/api/schedule?${q}`, undefined, "GET"),
-      postJson<{ entries?: PostView[] }>(`/api/history?${q}`, undefined, "GET"),
-    ])
-      .then(([s, h]) => {
-        if (cancelled) return;
-        const posts = s.posts || [];
-        setUpcoming(
-          posts
-            .filter((p) => p.status === "pending" || p.status === "processing")
-            .sort((a, b) => a.scheduledFor - b.scheduledFor)
-            .slice(0, 5),
-        );
-        setRecent(
-          [
-            ...posts.filter((p) => p.status !== "pending" && p.status !== "processing"),
-            ...(h.entries || []),
-          ]
-            .sort((a, b) => historyTime(b) - historyTime(a))
-            .slice(0, 5),
-        );
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [accountId, overviewKey]);
 
   /* ---------------- Media ---------------- */
   const fileRef = useRef<HTMLInputElement>(null);
@@ -722,7 +683,6 @@ export default function Page() {
             `Ingepland voor ${formatWhen(st.scheduledFor!)} — wordt meestal binnen ~5–15 minuten na dat tijdstip geplaatst`,
             5000,
           );
-          reloadOverview();
         } else {
           setModal((m) =>
             m ? { ...m, phase: "ready", submitError: data.error || "Inplannen mislukt" } : m,
@@ -770,7 +730,6 @@ export default function Page() {
     setModal(null);
     setResult(panel);
     // Echte posts staan server-side in de geschiedenis (ook bij een time-out).
-    reloadOverview();
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -799,7 +758,6 @@ export default function Page() {
         r ? { ...r, retrying: false, retryError: `Opnieuw proberen mislukt: ${errText(e)}` } : r,
       );
     }
-    reloadOverview();
   };
 
   const newPost = () => {
@@ -817,17 +775,6 @@ export default function Page() {
     setResult(null);
     // kanalen terug naar de gekoppelde kanalen van het account
     if (accountIdRef.current) selectAccount(accountIdRef.current);
-  };
-
-  const cancelScheduled = async (p: PostView) => {
-    if (!window.confirm(`Geplande post annuleren?\n\n"${p.subject}"`)) return;
-    setUpcoming((s) => s.filter((x) => x.id !== p.id));
-    try {
-      await postJson(`/api/schedule?id=${encodeURIComponent(p.id)}`, undefined, "DELETE");
-    } catch (e) {
-      showToast(`Annuleren mislukt: ${errText(e)}`);
-    }
-    reloadOverview();
   };
 
   const activeCaption = previewId ? captions[previewId] : undefined;
@@ -854,84 +801,61 @@ export default function Page() {
     );
   }
 
-  const publishLabel = isLater ? "🗓️ Plan in" : dryRun ? "🧪 Test (dry-run)" : "🚀 Post nu";
+  const publishLabel = isLater ? "Inplannen" : dryRun ? "Testen" : "Nu posten";
 
   /* ---------------- Render ---------------- */
   return (
-    <div className="min-h-screen">
-      <Header connected={connectedCount} accountName={currentAccount?.name} />
-
-      <main className="mx-auto max-w-7xl px-4 pb-24 pt-6">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[420px_1fr]">
-          {/* LEFT — composer */}
-          <div className="flex flex-col gap-5">
-            {/* 0. account */}
-            <Card step={0} title="Voor welk account?">
-              {/* Eén account per post; multi-account posten valt buiten scope (captions/targets zijn per account). */}
-              <select
-                value={accountId}
-                onChange={(e) => changeAccount(e.target.value)}
-                disabled={!accountsLoaded || accounts.length === 0}
-                aria-label="Account"
-                className="w-full rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 text-sm font-semibold outline-none focus:border-brand disabled:opacity-60"
-              >
-                {!accountsLoaded && <option value="">Accounts laden…</option>}
-                {accountsLoaded && accounts.length === 0 && (
-                  <option value="">Nog geen accounts</option>
-                )}
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-
-              {currentAccount && (
-                <ul className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  {CHANNEL_ORDER.map((pid) => {
-                    const ok = isConnected(currentAccount, pid);
-                    const handle = channelHandle(currentAccount, pid);
-                    return (
-                      <li
-                        key={pid}
-                        className={`flex min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-[11px] ${
-                          ok
-                            ? "border-accent/30 bg-accent/5"
-                            : "border-border bg-surface-2/30 text-muted"
-                        }`}
-                      >
-                        <span className={ok ? "" : "opacity-40 grayscale"}>
-                          <PlatformBadge id={pid} small />
-                        </span>
-                        <span className="min-w-0 truncate">
-                          {ok ? (
-                            <span className="text-foreground">{handle || PLATFORM_MAP[pid].name}</span>
-                          ) : (
-                            <>
-                              {PLATFORM_MAP[pid].name} · niet gekoppeld
-                            </>
-                          )}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {currentAccount && (
-                <a
-                  href={`/verbindingen?account=${encodeURIComponent(currentAccount.id)}`}
-                  className="mt-2 inline-block text-[11px] text-brand underline-offset-2 hover:underline"
+    <AppShell
+      active="/"
+      wide
+      title="Nieuwe post"
+      subtitle="Eén keer maken, overal plaatsen."
+      actions={
+        <>
+          {currentAccount && (
+            <div className="hidden items-center -space-x-1 sm:flex">
+              {CHANNEL_ORDER.map((pid) => (
+                <span
+                  key={pid}
+                  title={`${PLATFORM_MAP[pid].name}: ${
+                    isConnected(currentAccount, pid)
+                      ? channelHandle(currentAccount, pid) || "gekoppeld"
+                      : "niet gekoppeld"
+                  }`}
+                  className={`rounded-lg ring-2 ring-background ${
+                    isConnected(currentAccount, pid) ? "" : "opacity-30 grayscale"
+                  }`}
                 >
-                  Koppelingen beheren →
-                </a>
-              )}
-
+                  <PlatformBadge id={pid} small />
+                </span>
+              ))}
+            </div>
+          )}
+          {/* Eén account per post; multi-account posten valt buiten scope (captions/targets zijn per account). */}
+          <select
+            value={accountId}
+            onChange={(e) => changeAccount(e.target.value)}
+            disabled={!accountsLoaded || accounts.length === 0}
+            aria-label="Account"
+            className="min-w-44 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium shadow-sm outline-none focus:border-brand disabled:opacity-60"
+          >
+            {!accountsLoaded && <option value="">Accounts laden…</option>}
+            {accountsLoaded && accounts.length === 0 && <option value="">Nog geen accounts</option>}
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </>
+      }
+    >
               {warnings.length > 0 && (
                 <div
                   role="alert"
-                  className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200"
+                  className="mb-5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700"
                 >
-                  <p className="font-semibold text-amber-300">⚠️ Koppeling vraagt aandacht</p>
+                  <p className="font-semibold text-amber-700">⚠️ Koppeling vraagt aandacht</p>
                   <ul className="mt-1 flex flex-col gap-0.5">
                     {warnings.map((w, i) => (
                       <li key={`${w.platform}-${i}`}>{w.text}</li>
@@ -941,14 +865,14 @@ export default function Page() {
                     href={`/verbindingen?account=${encodeURIComponent(accountId)}`}
                     className="mt-1 inline-block underline"
                   >
-                    Opnieuw koppelen via Verbindingen
+                    Opnieuw koppelen via Kanalen
                   </a>
                 </div>
               )}
-            </Card>
-
-            {/* 1. media */}
-            <Card step={1} title="Leg je content klaar">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[440px_1fr]">
+          {/* LINKS: post maken */}
+          <div className="flex flex-col gap-5">
+            <Card title="Media">
               <div
                 onClick={() => fileRef.current?.click()}
                 onDragOver={(e) => e.preventDefault()}
@@ -1021,7 +945,7 @@ export default function Page() {
                     </p>
                     {media.error ? (
                       <div className="mt-2">
-                        <p className="text-[11px] text-red-400">{media.error}</p>
+                        <p className="text-[11px] text-red-600">{media.error}</p>
                         <button
                           onClick={retryUpload}
                           className="mt-1.5 rounded-md border border-border bg-surface-2/60 px-2.5 py-1 text-[11px] transition hover:border-brand"
@@ -1047,8 +971,7 @@ export default function Page() {
               )}
             </Card>
 
-            {/* 2. idee + toon */}
-            <Card step={2} title="Waar gaat het over? (optioneel)">
+            <Card title="Waar gaat het over?" hint="optioneel">
               <textarea
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
@@ -1074,8 +997,7 @@ export default function Page() {
               </div>
             </Card>
 
-            {/* 3. kanalen */}
-            <Card step={3} title="Kies je kanalen">
+            <Card title="Kanalen">
               <div className="flex flex-col gap-2">
                 {PLATFORMS.map((p) => {
                   const connected = isConnected(currentAccount, p.id);
@@ -1148,7 +1070,7 @@ export default function Page() {
                       )}
 
                       {on && !blocked && softReason && (
-                        <p className="mt-2 pl-1 text-[11px] text-amber-400">
+                        <p className="mt-2 pl-1 text-[11px] text-amber-700">
                           {p.name} {softReason} — upload eerst je media
                         </p>
                       )}
@@ -1224,13 +1146,13 @@ export default function Page() {
 
                       {on && p.id === "youtube" &&
                         ytWarnings.map((w) => (
-                          <p key={w} className="mt-2 pl-1 text-[11px] text-amber-400">
+                          <p key={w} className="mt-2 pl-1 text-[11px] text-amber-700">
                             ⚠️ {w}
                           </p>
                         ))}
                       {on && p.id === "instagram" &&
                         igWarnings.map((w) => (
-                          <p key={w} className="mt-2 pl-1 text-[11px] text-amber-400">
+                          <p key={w} className="mt-2 pl-1 text-[11px] text-amber-700">
                             ⚠️ {w}
                           </p>
                         ))}
@@ -1238,13 +1160,13 @@ export default function Page() {
                   );
                 })}
                 {currentAccount && connectedCount === 0 && (
-                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300/90">
+                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700">
                     ⚠️ {currentAccount.name} heeft nog geen gekoppelde kanalen.{" "}
                     <a
                       href={`/verbindingen?account=${encodeURIComponent(currentAccount.id)}`}
                       className="underline"
                     >
-                      Koppel ze via Verbindingen
+                      Koppel ze via Kanalen
                     </a>
                     .
                   </p>
@@ -1256,7 +1178,7 @@ export default function Page() {
             <button
               onClick={generate}
               disabled={loading || Boolean(genFor) || selected.size === 0}
-              className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-brand to-brand-2 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-110 disabled:opacity-60"
+              className="group relative overflow-hidden rounded-xl bg-brand px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:opacity-60"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
@@ -1264,13 +1186,13 @@ export default function Page() {
                 </span>
               ) : (
                 <span className="flex items-center justify-center gap-2">
-                  {hasCaptions ? "🔄 Opnieuw genereren" : "✨ Genereer captions met AI"}
+                  {hasCaptions ? "Captions opnieuw schrijven" : "✨ Schrijf captions met AI"}
                 </span>
               )}
             </button>
           </div>
 
-          {/* RIGHT — resultaat, previews, publiceren */}
+          {/* RECHTS: resultaat, preview en posten */}
           <div className="flex flex-col gap-5">
             {result && (
               <ResultPanel state={result} onRetry={retryFailed} onNewPost={newPost} />
@@ -1294,7 +1216,7 @@ export default function Page() {
                     >
                       <PlatformBadge id={p.id} small />
                       {p.name}
-                      {!captions[p.id]?.caption && <span className="text-amber-400">•</span>}
+                      {!captions[p.id]?.caption && <span className="text-amber-700">•</span>}
                     </button>
                   ))}
                   {source && (
@@ -1329,7 +1251,7 @@ export default function Page() {
                       type="button"
                       onClick={() => void generateFor(previewId)}
                       disabled={Boolean(genFor) || loading}
-                      className="rounded-lg bg-gradient-to-r from-brand to-brand-2 px-4 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
+                      className="rounded-lg bg-brand px-4 py-2 text-xs font-semibold text-white transition hover:bg-brand/90 disabled:opacity-60"
                     >
                       {genFor === previewId ? (
                         <span className="flex items-center gap-2">
@@ -1351,10 +1273,10 @@ export default function Page() {
                 <div className="flex flex-col gap-4">
                   <div className="flex gap-2">
                     <SegBtn active={schedule === "now"} onClick={() => setSchedule("now")}>
-                      🚀 Nu posten
+                      Direct
                     </SegBtn>
                     <SegBtn active={schedule === "later"} onClick={() => setSchedule("later")}>
-                      🗓️ Inplannen
+                      Inplannen
                     </SegBtn>
                   </div>
                   {isLater && (
@@ -1369,7 +1291,7 @@ export default function Page() {
                   {!isLater && (
                     <div className="flex items-center justify-between rounded-lg border border-border bg-surface-2/40 px-3 py-2">
                       <span className="flex items-center gap-2 text-xs">
-                        🧪 Testmodus
+                        Testmodus
                         <span className="text-muted">(controleer koppeling, post niets)</span>
                       </span>
                       <Switch on={dryRun} label="Testmodus" onClick={() => setDryRun(!dryRun)} />
@@ -1400,7 +1322,7 @@ export default function Page() {
                     <button
                       onClick={openConfirm}
                       disabled={!canPublish || publishing || Boolean(modal)}
-                      className="shrink-0 rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="shrink-0 rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {publishing ? (
                         <span className="flex items-center gap-2">
@@ -1414,7 +1336,7 @@ export default function Page() {
                     </button>
                   </div>
                   {!canPublish && (
-                    <p className="truncate text-[11px] text-amber-300/90" title={missing.join(" · ")}>
+                    <p className="truncate text-[11px] text-amber-700" title={missing.join(" · ")}>
                       Nog nodig: {missing.join(" · ")}
                     </p>
                   )}
@@ -1428,57 +1350,8 @@ export default function Page() {
               </Card>
             )}
 
-            {/* overzicht van het gekozen account */}
-            {accountId && (
-              <Card title={`Planning · ${currentAccount?.name ?? "account"}`}>
-                <div className="flex flex-col gap-4">
-                  <div>
-                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      Volgende geplande posts
-                    </p>
-                    {upcoming.length === 0 ? (
-                      <p className="text-xs text-muted">Niets ingepland.</p>
-                    ) : (
-                      <div className="flex flex-col gap-1.5">
-                        {upcoming.map((p) => (
-                          <MiniPost
-                            key={p.id}
-                            post={p}
-                            time={p.scheduledFor}
-                            onCancel={
-                              p.status === "pending" ? () => cancelScheduled(p) : undefined
-                            }
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                      Laatst geplaatst
-                    </p>
-                    {recent.length === 0 ? (
-                      <p className="text-xs text-muted">Nog niets geplaatst.</p>
-                    ) : (
-                      <div className="flex flex-col gap-1.5">
-                        {recent.map((p) => (
-                          <MiniPost key={`${p.source}-${p.id}`} post={p} time={historyTime(p)} />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <a
-                    href={`/planning?account=${encodeURIComponent(accountId)}`}
-                    className="text-xs text-brand underline-offset-2 hover:underline"
-                  >
-                    Alles bekijken in Planning →
-                  </a>
-                </div>
-              </Card>
-            )}
           </div>
         </div>
-      </main>
 
       {modal && (
         <ConfirmModal
@@ -1497,7 +1370,7 @@ export default function Page() {
           {toast}
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }
 

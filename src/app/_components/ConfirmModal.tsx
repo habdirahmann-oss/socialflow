@@ -86,7 +86,7 @@ export function ConfirmModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center"
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/40 p-4 backdrop-blur-[2px] sm:items-center"
       onClick={() => !busy && onClose()}
     >
       <div
@@ -120,11 +120,11 @@ export function ConfirmModal({
               <Spinner /> Controle (dry-run) loopt — er wordt niets geplaatst…
             </>
           ) : state.error ? (
-            <span className="text-red-400">Controle mislukt: {state.error}</span>
+            <span className="text-red-600">Controle mislukt: {state.error}</span>
           ) : (
             <span>
               Controle klaar: <span className="text-accent">{okCount} klaar</span>
-              {failCount > 0 && <span className="text-red-400"> · {failCount} mislukt</span>}
+              {failCount > 0 && <span className="text-red-600"> · {failCount} mislukt</span>}
             </span>
           )}
         </div>
@@ -143,7 +143,7 @@ export function ConfirmModal({
                     {platformName(platform)} · {placementName(platform, placement)}
                   </p>
                   {r && !r.ok && r.error && (
-                    <p className="mt-0.5 text-[11px] text-red-400">{r.error}</p>
+                    <p className="mt-0.5 text-[11px] text-red-600">{r.error}</p>
                   )}
                 </div>
                 <span className="shrink-0 text-sm">
@@ -153,7 +153,7 @@ export function ConfirmModal({
                     r.ok ? (
                       <span className="text-accent">✓</span>
                     ) : (
-                      <span className="text-red-400">✗</span>
+                      <span className="text-red-600">✗</span>
                     )
                   ) : (
                     <span className="text-muted">–</span>
@@ -169,12 +169,12 @@ export function ConfirmModal({
 
         {dropped.length > 0 && (
           <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-            <p className="text-[11px] font-semibold text-amber-300">Overgeslagen</p>
+            <p className="text-[11px] font-semibold text-amber-700">Overgeslagen</p>
             <ul className="mt-1 flex flex-col gap-0.5">
               {dropped.map((d) => (
                 <li
                   key={`${d.platform}-${d.placement}-${d.reason}`}
-                  className="text-[11px] text-amber-200/90"
+                  className="text-[11px] text-amber-700"
                 >
                   ✗ {platformName(d.platform)} · {placementName(d.platform, d.placement)} —{" "}
                   {d.reason}
@@ -185,19 +185,19 @@ export function ConfirmModal({
         )}
 
         {mode === "schedule" && allFailed && (
-          <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600">
             Inplannen geweigerd: geen enkel kanaal komt door de controle. Los de fouten
-            hierboven op (bijv. koppel het kanaal opnieuw via Verbindingen).
+            hierboven op (bijv. koppel het kanaal opnieuw via Kanalen).
           </p>
         )}
         {mode !== "test" && checked && okCount > 0 && failCount > 0 && (
-          <p className="mt-3 text-xs text-amber-300/90">
+          <p className="mt-3 text-xs text-amber-700">
             Alleen de {okCount} geslaagde {okCount === 1 ? "plaatsing wordt" : "plaatsingen worden"}{" "}
             {mode === "schedule" ? "ingepland" : "geplaatst"}; de mislukte worden overgeslagen.
           </p>
         )}
         {state.submitError && (
-          <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600">
             {state.submitError}
           </p>
         )}
@@ -225,7 +225,7 @@ export function ConfirmModal({
               type="button"
               onClick={onConfirm}
               disabled={phase !== "ready" || okCount === 0}
-              className="rounded-lg bg-accent px-5 py-2 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? (
                 <span className="flex items-center gap-2">

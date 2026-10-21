@@ -66,7 +66,7 @@ export function ResultPanel({
         )}
       </div>
 
-      {state.error && <p className="mt-2 text-xs text-red-300">{state.error}</p>}
+      {state.error && <p className="mt-2 text-xs text-red-600">{state.error}</p>}
 
       {state.results.length > 0 && (
         <ul className="mt-3 flex flex-col gap-1.5">
@@ -85,9 +85,9 @@ export function ResultPanel({
                   {platformName(r.platform)} · {placementName(r.platform, r.placement)}
                 </p>
                 {!r.ok && r.error && (
-                  <p className="mt-0.5 text-[11px] text-red-400">{r.error}</p>
+                  <p className="mt-0.5 text-[11px] text-red-600">{r.error}</p>
                 )}
-                {r.note && <p className="mt-0.5 text-[11px] text-amber-300/90">{r.note}</p>}
+                {r.note && <p className="mt-0.5 text-[11px] text-amber-700">{r.note}</p>}
               </div>
               {r.ok ? (
                 <span className="flex shrink-0 items-center gap-2 text-sm">
@@ -104,7 +104,7 @@ export function ResultPanel({
                   )}
                 </span>
               ) : (
-                <span className="shrink-0 text-sm text-red-400">✗</span>
+                <span className="shrink-0 text-sm text-red-600">✗</span>
               )}
             </li>
           ))}
@@ -131,14 +131,14 @@ export function ResultPanel({
       )}
 
       {state.dropped.length > 0 && (
-        <p className="mt-2 text-[11px] text-amber-200/90">
+        <p className="mt-2 text-[11px] text-amber-700">
           Overgeslagen:{" "}
           {state.dropped
             .map((d) => `${platformName(d.platform)} ${placementName(d.platform, d.placement)} (${d.reason})`)
             .join(", ")}
         </p>
       )}
-      {state.retryError && <p className="mt-2 text-xs text-red-300">{state.retryError}</p>}
+      {state.retryError && <p className="mt-2 text-xs text-red-600">{state.retryError}</p>}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {state.historyId && failed.length > 0 && (
@@ -161,7 +161,7 @@ export function ResultPanel({
           type="button"
           onClick={onNewPost}
           disabled={state.retrying}
-          className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:brightness-110 disabled:opacity-60"
+          className="rounded-lg bg-brand px-4 py-2 text-xs font-semibold text-white transition hover:bg-brand/90 disabled:opacity-60"
         >
           ＋ Nieuwe post
         </button>

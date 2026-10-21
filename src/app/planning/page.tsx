@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import AppNav from "@/components/AppNav";
+import AppShell from "@/components/AppShell";
 import PlatformBadge from "@/components/PlatformBadge";
 import { PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
 import { postJson } from "@/lib/client-fetch";
@@ -359,39 +359,22 @@ function Planning() {
   /* ---------------- Render ---------------- */
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="SocialFlow" className="h-9 w-9 rounded-xl" />
-            <div>
-              <h1 className="text-base font-bold leading-none">SocialFlow</h1>
-              <p className="text-[11px] text-muted">planning</p>
-            </div>
-          </div>
-          <AppNav active="/planning" />
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-5xl px-4 pb-24 pt-6">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-2xl font-bold">Planning</h2>
-            <p className="mt-1 text-sm text-muted">
-              Wachtrij en geschiedenis van al je posts, per klant.
-            </p>
-          </div>
-          <button
-            onClick={reload}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition hover:text-foreground"
-          >
-            ↻ Vernieuwen
-          </button>
-        </div>
+    <AppShell
+      active="/planning"
+      title="Planning"
+      subtitle="Wachtrij en geschiedenis van al je posts, per klant."
+      actions={
+        <button
+          onClick={reload}
+          className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted shadow-sm transition hover:text-foreground"
+        >
+          ↻ Vernieuwen
+        </button>
+      }
+    >
 
         {cronStale && (
-          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300/90">
+          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700">
             ⚠️ Automatisch plaatsen lijkt niet actief (laatste run:{" "}
             {cron?.ranAt ? fmtDateTime(cron.ranAt) : "nog nooit"}). Geplande posts
             worden pas geplaatst als de planner weer draait — gebruik zo nodig
@@ -432,7 +415,7 @@ function Planning() {
         </div>
 
         {loadError && (
-          <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600">
             {loadError}
           </p>
         )}
@@ -445,9 +428,9 @@ function Planning() {
               <p className="mt-3 text-sm text-muted">Laden…</p>
             ) : queueGroups.length === 0 ? (
               <p className="mt-3 rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted">
-                Niets ingepland{accountId ? " voor deze klant" : ""}. Plan iets in via de{" "}
+                Niets ingepland{accountId ? " voor deze klant" : ""}. Plan iets in via{" "}
                 <Link href="/" className="underline">
-                  Composer
+                  Nieuwe post
                 </Link>
                 .
               </p>
@@ -511,20 +494,19 @@ function Planning() {
             )}
           </section>
         ) : null}
-      </main>
 
       {toast && (
         <div
           className={`fixed bottom-6 left-1/2 z-50 max-w-[90vw] -translate-x-1/2 whitespace-pre-line rounded-xl border px-4 py-3 text-sm shadow-xl ${
             toast.error
-              ? "border-red-500/40 bg-surface text-red-300"
+              ? "border-red-500/40 bg-surface text-red-600"
               : "border-border bg-surface"
           }`}
         >
           {toast.msg}
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }
 
@@ -553,16 +535,16 @@ function resultToast(post: PostView | null | undefined, processed?: boolean): st
 function StatusBadge({ post }: { post: PostView }) {
   const map: Record<PostView["status"], { label: string; cls: string }> = {
     pending: { label: "Gepland", cls: "bg-brand/15 text-brand" },
-    processing: { label: "Bezig", cls: "bg-sky-500/15 text-sky-300" },
+    processing: { label: "Bezig", cls: "bg-sky-500/15 text-sky-700" },
     posted: { label: "Gepost", cls: "bg-accent/15 text-accent" },
-    partial: { label: "Gedeeltelijk", cls: "bg-amber-500/15 text-amber-400" },
-    failed: { label: "Mislukt", cls: "bg-red-500/15 text-red-400" },
+    partial: { label: "Gedeeltelijk", cls: "bg-amber-500/15 text-amber-700" },
+    failed: { label: "Mislukt", cls: "bg-red-500/15 text-red-600" },
   };
   const s = map[post.status] ?? map.pending;
   return (
     <span className="flex items-center gap-1">
       {post.dryRun && (
-        <span className="rounded-full bg-purple-500/15 px-2 py-0.5 text-[11px] text-purple-300">
+        <span className="rounded-full bg-purple-500/15 px-2 py-0.5 text-[11px] text-purple-700">
           Test
         </span>
       )}
@@ -649,12 +631,12 @@ function PostCard({
           <p className="mt-1 truncate text-sm text-muted">{p.subject}</p>
 
           {unknownState && (
-            <p className="mt-1 text-xs text-sky-300">
+            <p className="mt-1 text-xs text-sky-700">
               Bezig / onbekend — controleer het kanaal
             </p>
           )}
           {p.status === "pending" && (p.attempts ?? 0) > 0 && (
-            <p className="mt-1 text-xs text-amber-300/90">
+            <p className="mt-1 text-xs text-amber-700">
               {p.lastError ? `${p.lastError} — ` : ""}
               nieuwe poging
               {p.nextAttemptAt ? ` rond ${fmtTime(p.nextAttemptAt)}` : ""} (poging{" "}
@@ -692,15 +674,15 @@ function PostCard({
                       )}
                     </span>
                   ) : (
-                    <span className="text-red-400">✗ {r.error || "mislukt"}</span>
+                    <span className="text-red-600">✗ {r.error || "mislukt"}</span>
                   )}
-                  {r.note && <span className="text-amber-300/90"> — {r.note}</span>}
+                  {r.note && <span className="text-amber-700"> — {r.note}</span>}
                 </li>
               ))}
             </ul>
           )}
           {results.length === 0 && p.lastError && p.status !== "pending" && (
-            <p className="mt-1 text-xs text-red-400">✗ {p.lastError}</p>
+            <p className="mt-1 text-xs text-red-600">✗ {p.lastError}</p>
           )}
 
           {/* acties */}
@@ -754,7 +736,7 @@ function ActionBtn({
       onClick={onClick}
       disabled={disabled}
       className={`rounded-md border border-border bg-surface-2/60 px-2.5 py-1 text-xs transition disabled:opacity-50 ${
-        danger ? "hover:border-red-500/60 hover:text-red-400" : "hover:border-brand"
+        danger ? "hover:border-red-500/60 hover:text-red-600" : "hover:border-brand"
       }`}
     >
       {children}
@@ -872,12 +854,12 @@ function EditForm({
           />
         </div>
       ))}
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs text-red-600">{error}</p>}
       <div>
         <button
           onClick={submit}
           disabled={busy}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-60"
+          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:opacity-60"
         >
           {busy ? "Opslaan…" : "Opslaan"}
         </button>

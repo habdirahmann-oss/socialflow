@@ -66,7 +66,7 @@ export function CaptionEditor({
               </label>
               <span
                 className={`text-[11px] ${
-                  title.length > YT_TITLE_MAX ? "text-red-400" : "text-muted"
+                  title.length > YT_TITLE_MAX ? "text-red-600" : "text-muted"
                 }`}
               >
                 {title.length}/{YT_TITLE_MAX}
@@ -89,7 +89,7 @@ export function CaptionEditor({
             <span
               title="Caption + hashtags samen"
               data-testid="caption-counter"
-              className={`text-[11px] ${over ? "font-semibold text-red-400" : "text-muted"}`}
+              className={`text-[11px] ${over ? "font-semibold text-red-600" : "text-muted"}`}
             >
               {len}/{p.maxChars}
               <span className="ml-1 opacity-70">incl. hashtags</span>
@@ -109,7 +109,7 @@ export function CaptionEditor({
           <label htmlFor="story-text" className="block text-xs text-muted">
             Story-overlay (korte tekst)
           </label>
-          <p className="mb-1 text-[10px] text-amber-300/90">{STORY_PREVIEW_NOTE}</p>
+          <p className="mb-1 text-[10px] text-amber-700">{STORY_PREVIEW_NOTE}</p>
           <input
             id="story-text"
             value={caption.story}

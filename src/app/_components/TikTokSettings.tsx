@@ -139,7 +139,7 @@ export function TikTokSettingsPanel({
 
   return (
     <div className="mt-3 flex flex-col gap-3 rounded-xl border border-border bg-surface-2/40 p-3">
-      {error && <p className="text-[11px] text-red-400">{error}</p>}
+      {error && <p className="text-[11px] text-red-600">{error}</p>}
       {info && (
         <div className="flex items-center gap-2">
           {info.avatarUrl ? (
@@ -251,7 +251,7 @@ export function TikTokSettingsPanel({
               Branded content (betaalde samenwerking)
             </Check>
             {(draft.yourBrand || draft.brandedContent) && (
-              <p className="text-[10px] text-amber-300/90">
+              <p className="text-[10px] text-amber-700">
                 Je {isPhoto ? "foto" : "video"} krijgt het label &lsquo;
                 {draft.brandedContent ? "Paid partnership" : "Promotional content"}&rsquo;.
               </p>

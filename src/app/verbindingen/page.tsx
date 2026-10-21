@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useState, Suspense, useCallback, useMemo } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PLATFORM_MAP } from "@/lib/platforms";
-import AppNav from "@/components/AppNav";
+import AppShell from "@/components/AppShell";
 import type { AccountInfo, AccountsResponse, ChannelHealth } from "@/lib/types";
 
 /** Vaste Nederlandse teksten voor bekende `reden`-waarden uit de callbacks. */
@@ -179,43 +178,30 @@ function Inner() {
   };
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <Link href="/" className="flex items-center gap-2.5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.png" alt="SocialFlow" className="h-9 w-9 rounded-xl" />
-            <div>
-              <h1 className="text-base font-bold leading-none">SocialFlow</h1>
-              <p className="text-[11px] text-muted">verbindingen</p>
-            </div>
-          </Link>
-          <AppNav active="/verbindingen" />
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-4xl px-4 pb-24 pt-8">
-        <h2 className="text-2xl font-bold">Accounts &amp; verbindingen</h2>
-        <p className="mt-2 max-w-2xl text-sm text-muted">
-          Beheer meerdere accounts (bijv. per merk of klant, maximaal{" "}
-          {maxAccounts}). Elk account heeft z&apos;n eigen koppelingen met
-          Facebook, Instagram, TikTok en YouTube.
-        </p>
-
+    <AppShell
+      active="/verbindingen"
+      title="Kanalen"
+      subtitle={
+        <>
+          Beheer je accounts (per merk of klant, maximaal {maxAccounts}). Elk account heeft
+          z&apos;n eigen koppelingen met Facebook, Instagram, TikTok en YouTube.
+        </>
+      }
+    >
         {metaResult === "ok" && (
           <div className="mt-5 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
             ✓ Koppeling gelukt! De accounts staan hieronder bijgewerkt.
           </div>
         )}
         {metaResult === "kies_pagina" && (
-          <div className="mt-5 rounded-xl border border-orange-400/40 bg-orange-400/10 px-4 py-3 text-sm text-orange-300">
+          <div className="mt-5 rounded-xl border border-orange-400/40 bg-orange-400/10 px-4 py-3 text-sm text-orange-700">
             ⚠ Facebook is gekoppeld, maar je hebt toegang tot meerdere
             pagina&apos;s. Kies hieronder bij het account met welke pagina het
             post — tot die tijd wordt er niets naar Facebook/Instagram geplaatst.
           </div>
         )}
         {metaResult === "error" && (
-          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-600">
             ✕ Koppelen mislukt{reden ? `: ${reden}` : ""}. Controleer ook de
             redirect-URI en je rechten in de Meta-app.
           </div>
@@ -226,7 +212,7 @@ function Inner() {
           </div>
         )}
         {igResult === "error" && (
-          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-600">
             ✕ Instagram-login mislukt{reden ? `: ${reden}` : ""}.
           </div>
         )}
@@ -236,7 +222,7 @@ function Inner() {
           </div>
         )}
         {ttResult === "error" && (
-          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-600">
             ✕ TikTok-koppeling mislukt{reden ? `: ${reden}` : ""}.
           </div>
         )}
@@ -246,13 +232,13 @@ function Inner() {
           </div>
         )}
         {ytResult === "error" && (
-          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-600">
             ✕ YouTube-koppeling mislukt{reden ? `: ${reden}` : ""}.
           </div>
         )}
 
         {!configured && (
-          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-600">
             Meta-app niet geconfigureerd (META_APP_ID / META_APP_SECRET ontbreken).
           </div>
         )}
@@ -270,13 +256,13 @@ function Inner() {
           <button
             onClick={addAccount}
             disabled={atMax}
-            className="rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             + Account
           </button>
         </div>
         {(addError || atMax) && (
-          <p className={`mt-2 text-xs ${addError ? "text-red-300" : "text-muted"}`}>
+          <p className={`mt-2 text-xs ${addError ? "text-red-600" : "text-muted"}`}>
             {addError ?? `Maximaal ${maxAccounts} klantaccounts bereikt.`}
           </p>
         )}
@@ -304,8 +290,7 @@ function Inner() {
             />
           ))}
         </div>
-      </main>
-    </div>
+    </AppShell>
   );
 }
 
@@ -390,7 +375,7 @@ function AccountCard({
         {canRemove && (
           <button
             onClick={onRemove}
-            className="ml-auto text-xs text-muted transition hover:text-red-400"
+            className="ml-auto text-xs text-muted transition hover:text-red-600"
           >
             Account verwijderen
           </button>
@@ -470,13 +455,13 @@ function AccountCard({
                 </>
               )}
               {account.pageChoiceRequired && (
-                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-300">
+                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-700">
                   ⚠ Kies een pagina — tot die tijd wordt er niets naar Facebook
                   of Instagram (via de pagina) geplaatst.
                 </p>
               )}
               {account.implicitPage && activePage && (
-                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-300">
+                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-700">
                   ⚠ Kies expliciet een pagina — nu wordt automatisch de eerste
                   gebruikt ({activePage.name}).
                 </p>
@@ -489,7 +474,7 @@ function AccountCard({
                 </p>
               )}
               {activePage && samePageAccounts.length > 0 && (
-                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-300">
+                <p className="mt-1.5 rounded-md bg-orange-400/15 px-2 py-1 text-[11px] font-medium text-orange-700">
                   ⚠ Let op: {activePage.name} is ook gekozen bij{" "}
                   {samePageAccounts.join(", ")}. Posts van beide accounts komen
                   op dezelfde pagina.
@@ -509,7 +494,7 @@ function AccountCard({
           {account.facebook && <HealthLine health={account.health?.facebook} />}
 
           {configured && (
-            <p className="mt-3 text-[11px] text-orange-300/90">
+            <p className="mt-3 text-[11px] text-orange-700">
               💡 Laat bij inloggen ALLE klantpagina&apos;s aangevinkt — anders
               verdwijnen pagina&apos;s bij andere accounts.
             </p>
@@ -518,17 +503,17 @@ function AccountCard({
             {configured ? (
               <a
                 href={`/api/auth/meta/login?account=${account.id}`}
-                className="rounded-lg bg-gradient-to-r from-brand to-brand-2 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110"
+                className="rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-surface-2"
               >
                 {account.facebook ? "🔁 Opnieuw verbinden" : "🔗 Verbinden met Facebook"}
               </a>
             ) : (
-              <span className="text-sm text-red-300">Meta niet geconfigureerd</span>
+              <span className="text-sm text-red-600">Meta niet geconfigureerd</span>
             )}
             {(account.facebook || account.instagram) && (
               <button
                 onClick={() => onDisconnectType("meta")}
-                className="text-sm text-muted transition hover:text-red-400"
+                className="text-sm text-muted transition hover:text-red-600"
               >
                 Ontkoppelen
               </button>
@@ -567,21 +552,21 @@ function AccountCard({
             {igConfigured ? (
               <a
                 href={`/api/auth/instagram/login?account=${account.id}`}
-                className="rounded-lg bg-gradient-to-r from-[#f58529] via-[#dd2a7b] to-[#8134af] px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110"
+                className="rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-surface-2"
               >
                 {account.igLogin
                   ? "🔁 Opnieuw inloggen"
                   : "🔗 Inloggen met Instagram"}
               </a>
             ) : (
-              <span className="text-sm text-red-300">
+              <span className="text-sm text-red-600">
                 Instagram niet geconfigureerd
               </span>
             )}
             {account.igLogin && (
               <button
                 onClick={() => onDisconnectType("ig")}
-                className="text-sm text-muted transition hover:text-red-400"
+                className="text-sm text-muted transition hover:text-red-600"
               >
                 Ontkoppelen
               </button>
@@ -601,7 +586,7 @@ function AccountCard({
             <div>
               <p className="text-sm font-semibold">TikTok</p>
               <p className="text-[11px] text-muted">
-                Video&apos;s posten (openbaar)
+                Video&apos;s en foto&apos;s posten
               </p>
             </div>
             <span className="ml-auto">
@@ -618,7 +603,7 @@ function AccountCard({
             {ttConfigured ? (
               <a
                 href={`/api/auth/tiktok/login?account=${account.id}`}
-                className="rounded-lg bg-gradient-to-r from-[#25F4EE] to-[#FE2C55] px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
+                className="rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-surface-2"
               >
                 {account.tiktok ? "🔁 Opnieuw koppelen" : "🔗 Koppel TikTok"}
               </a>
@@ -630,7 +615,7 @@ function AccountCard({
             {account.tiktok && (
               <button
                 onClick={() => onDisconnectType("tiktok")}
-                className="text-sm text-muted transition hover:text-red-400"
+                className="text-sm text-muted transition hover:text-red-600"
               >
                 Ontkoppelen
               </button>
@@ -665,7 +650,7 @@ function AccountCard({
             {ytConfigured ? (
               <a
                 href={`/api/auth/youtube/login?account=${account.id}`}
-                className="rounded-lg bg-gradient-to-r from-[#FF0000] to-[#7a0000] px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110"
+                className="rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition hover:bg-surface-2"
               >
                 {account.youtube ? "🔁 Opnieuw koppelen" : "🔗 Koppel YouTube"}
               </a>
@@ -677,7 +662,7 @@ function AccountCard({
             {account.youtube && (
               <button
                 onClick={() => onDisconnectType("youtube")}
-                className="text-sm text-muted transition hover:text-red-400"
+                className="text-sm text-muted transition hover:text-red-600"
               >
                 Ontkoppelen
               </button>
@@ -739,10 +724,10 @@ function HealthLine({ health }: { health?: ChannelHealth }) {
   let cls: string;
   let text: string;
   if (status === "needs_reauth") {
-    cls = "border border-red-500/40 bg-red-500/15 text-red-300";
+    cls = "border border-red-500/40 bg-red-500/15 text-red-600";
     text = "✕ Opnieuw verbinden nodig";
   } else if (status === "expiring") {
-    cls = "border border-orange-400/40 bg-orange-400/15 text-orange-300";
+    cls = "border border-orange-400/40 bg-orange-400/15 text-orange-700";
     text = expiresAt ? `⚠ Verloopt ${dagen(daysLeft(expiresAt))}` : "⚠ Verloopt binnenkort";
   } else {
     cls = "bg-accent/15 text-accent";
@@ -766,7 +751,7 @@ function HealthLine({ health }: { health?: ChannelHealth }) {
         ) : null}
       </div>
       {status === "needs_reauth" && lastError && (
-        <p className="text-[11px] text-red-300/90">Laatste fout: {lastError}</p>
+        <p className="text-[11px] text-red-600">Laatste fout: {lastError}</p>
       )}
     </div>
   );
