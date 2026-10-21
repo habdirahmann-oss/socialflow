@@ -52,6 +52,7 @@ export function channelBlockReason(
     case "instagram":
       return mediaKind ? null : REASON.needsMedia;
     case "tiktok":
+      return mediaKind ? null : REASON.needsVideo;
     case "youtube":
       if (!mediaKind) return REASON.needsVideo;
       if (mediaKind === "image") return REASON.videoOnly;
@@ -133,8 +134,7 @@ export function normalizeTargets(
           if (plc === "story") drop(platform, plc, REASON.unsupported);
           else if (plc !== "feed") drop(platform, plc, REASON.unknownPlacement);
           else if (!mediaKind) drop(platform, plc, REASON.needsVideo);
-          else if (mediaKind === "image") drop(platform, plc, REASON.videoOnly);
-          else add("feed");
+          else add("feed"); // foto('s) → TikTok-fotopost, video → video
         }
         break;
 

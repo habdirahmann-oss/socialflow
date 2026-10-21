@@ -19,7 +19,7 @@ export const maxDuration = 300; // video's kunnen even duren (Hobby + Fluid Comp
 interface PublishBody {
   accountId?: unknown;
   /** Bij voorkeur { url, type } (directe upload); { dataUrl, type } blijft als fallback. */
-  media?: MediaInput | null;
+  media?: MediaInput | MediaInput[] | null;
   targets?: unknown;
   captions?: unknown;
   subject?: unknown;
@@ -70,7 +70,7 @@ export async function POST(req: Request) {
 
   let media: Awaited<ReturnType<typeof resolveMediaInput>>;
   try {
-    media = await resolveMediaInput(body.media as MediaInput | null | undefined, dryRun);
+    media = await resolveMediaInput(body.media as MediaInput | MediaInput[] | null | undefined, dryRun);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Media opslaan mislukt" },
@@ -99,6 +99,7 @@ export async function POST(req: Request) {
             : "(zonder onderwerp)",
         mediaUrl: media?.url,
         mediaType: media?.type,
+        mediaUrls: media?.urls,
         targets: normalizeTargets(requestedTargets, media?.type).targets,
         requestedTargets,
         captions,
@@ -118,6 +119,7 @@ export async function POST(req: Request) {
       accountId: account.id,
       mediaUrl: media?.url,
       mediaType: media?.type,
+      mediaUrls: media?.urls,
       targets: requestedTargets,
       captions,
       dryRun,

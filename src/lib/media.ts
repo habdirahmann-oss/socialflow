@@ -192,3 +192,20 @@ export async function readMedia(
     return null;
   }
 }
+
+/**
+ * Blob-URL van een foto → dezelfde foto via ons eigen domein
+ * (APP_URL/api/media/<uuid>.jpg). Nodig voor TikTok (alleen geverifieerde domeinen).
+ */
+export function appMediaUrl(u: string): string {
+  try {
+    const url = new URL(u);
+    const m = /^\/media\/([a-f0-9-]{36}\.(jpg|png))$/.exec(url.pathname);
+    if (url.hostname.endsWith(".public.blob.vercel-storage.com") && m) {
+      return `${APP_URL}/api/media/${m[1]}`;
+    }
+  } catch {
+    // geen geldige URL: ongewijzigd teruggeven
+  }
+  return u;
+}

@@ -1,6 +1,6 @@
 import { kvGet, kvUpdate } from "./store";
 import { APP_URL } from "./config";
-import { publishIgMedia, type IgPlacement } from "./ig-media";
+import { publishIgMedia, publishIgCarousel, type IgPlacement } from "./ig-media";
 import { fetchJson, MEDIA_TIMEOUT_MS } from "./http";
 import {
   DAY_MS,
@@ -477,6 +477,43 @@ export async function postToFacebookPage(
   };
 }
 
+/**
+ * Meerdere foto's in één Facebook-post: elke foto eerst ongepubliceerd
+ * uploaden, daarna één feed-post met alle foto's als attached_media.
+ */
+export async function postAlbumToFacebookPage(
+  page: MetaPage,
+  message: string,
+  imageUrls: string[],
+): Promise<{ id: string; url: string }> {
+  const ids: string[] = [];
+  for (const [i, url] of imageUrls.entries()) {
+    const photo = await fetchJson<{ id?: string }>(
+      graphUrl(`/${page.id}/photos`),
+      {
+        method: "POST",
+        body: new URLSearchParams({
+          access_token: page.accessToken,
+          url,
+          published: "false",
+        }),
+      },
+      { label: `Facebook-foto ${i + 1}`, timeoutMs: 60_000 },
+    );
+    if (!photo.id) throw new Error(`Facebook-foto ${i + 1}: geen id ontvangen`);
+    ids.push(photo.id);
+  }
+  const body = new URLSearchParams({ access_token: page.accessToken, message });
+  ids.forEach((id, i) => body.set(`attached_media[${i}]`, JSON.stringify({ media_fbid: id })));
+  const data = await fetchJson<{ id?: string }>(
+    graphUrl(`/${page.id}/feed`),
+    { method: "POST", body },
+    { label: "Facebook-post" },
+  );
+  if (!data.id) throw new Error("Facebook gaf geen post-id terug");
+  return { id: data.id, url: `https://www.facebook.com/${data.id}` };
+}
+
 /** Lees-only controle (testmodus): werkt het pagina-token nog? */
 export async function checkFacebookPage(page: MetaPage, timeoutMs = 5000): Promise<void> {
   const params = new URLSearchParams({ fields: "id", access_token: page.accessToken });
@@ -519,5 +556,20 @@ export async function postToInstagram(
     caption,
     placement,
     deadline,
+  });
+}
+
+export async function postCarouselToInstagram(
+  igId: string,
+  pageToken: string,
+  imageUrls: string[],
+  caption: string,
+): Promise<{ id: string; permalink?: string }> {
+  return publishIgCarousel({
+    base: `https://graph.facebook.com/${META.graph}`,
+    igId,
+    token: pageToken,
+    imageUrls,
+    caption,
   });
 }

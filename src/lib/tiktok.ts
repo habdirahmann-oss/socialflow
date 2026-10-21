@@ -1,6 +1,6 @@
 import { kvGet, kvSet, kvUpdate, withLock } from "./store";
 import { APP_URL } from "./config";
-import { fetchJson, fetchRaw, downloadBuffer, MEDIA_TIMEOUT_MS, HttpError } from "./http";
+import { fetchJson, fetchRaw, downloadBuffer, sleep, MEDIA_TIMEOUT_MS, HttpError } from "./http";
 import {
   REFRESH_LOCK,
   errorText,
@@ -331,5 +331,80 @@ export async function postToTikTok(
     );
   }
 
+  return { id: publishId };
+}
+
+/* ---------------- Foto('s) posten (PULL_FROM_URL) ---------------- */
+
+/** TikTok: max. 35 foto's per fotopost. */
+export const TIKTOK_PHOTO_MAX = 35;
+
+/**
+ * Fotopost (1–35 foto's, swipebaar). TikTok haalt de foto's zelf op; de URL's
+ * moeten op ons geverifieerde domein staan (APP_URL/api/media/...).
+ * Daarna de status volgen tot TikTok de post heeft verwerkt (max ~60 s).
+ */
+export async function postPhotosToTikTok(
+  conn: TikTokConnection,
+  imageUrls: string[],
+  caption: string,
+  title?: string,
+): Promise<{ id: string }> {
+  if (!imageUrls.length || imageUrls.length > TIKTOK_PHOTO_MAX) {
+    throw new Error(`TikTok-fotopost: 1 t/m ${TIKTOK_PHOTO_MAX} foto's nodig`);
+  }
+  const privacy = await tiktokPrivacyLevel(conn);
+  const init = await fetchJson<{ data?: { publish_id?: string } }>(
+    "https://open.tiktokapis.com/v2/post/publish/content/init/",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${conn.accessToken}`,
+        "content-type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify({
+        post_info: {
+          title: (title || caption.split("\n")[0] || "").slice(0, 90),
+          description: caption.slice(0, 4000),
+          privacy_level: privacy,
+          auto_add_music: true,
+        },
+        source_info: {
+          source: "PULL_FROM_URL",
+          photo_cover_index: 0,
+          photo_images: imageUrls,
+        },
+        post_mode: "DIRECT_POST",
+        media_type: "PHOTO",
+      }),
+    },
+    { label: "TikTok fotopost-init" },
+  );
+  const publishId = init.data?.publish_id;
+  if (!publishId) throw new Error("TikTok fotopost-init: geen publish-id ontvangen");
+
+  // Ophalen + verwerken gebeurt asynchroon; een mislukking (bv. URL niet
+  // bereikbaar) zie je alleen in de status.
+  const until = Date.now() + 60_000;
+  while (Date.now() < until) {
+    await sleep(4000);
+    const st = await fetchJson<{ data?: { status?: string; fail_reason?: string } }>(
+      "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${conn.accessToken}`,
+          "content-type": "application/json; charset=UTF-8",
+        },
+        body: JSON.stringify({ publish_id: publishId }),
+      },
+      { label: "TikTok fotopost-status", timeoutMs: 10_000 },
+    ).catch(() => null);
+    const status = st?.data?.status;
+    if (status === "PUBLISH_COMPLETE") break;
+    if (status === "FAILED") {
+      throw new Error(`TikTok-fotopost mislukt: ${st?.data?.fail_reason || "onbekende reden"}`);
+    }
+  }
   return { id: publishId };
 }

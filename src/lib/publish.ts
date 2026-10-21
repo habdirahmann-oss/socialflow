@@ -6,6 +6,8 @@ import {
   checkFacebookPage,
   checkInstagramViaPage,
   markMetaNeedsReauth,
+  postAlbumToFacebookPage,
+  postCarouselToInstagram,
   needsPageChoice,
   PAGE_CHOICE_REQUIRED,
   META,
@@ -16,11 +18,18 @@ import {
   checkInstagramDirect,
   igNeedsReauth,
   markIgNeedsReauth,
+  postCarouselToInstagramDirect,
 } from "./instagram";
 import { expiredMessage, errorText, isMetaTokenError } from "./token-status";
-import { loadTikTokConnection, postToTikTok, tiktokUserInfo } from "./tiktok";
+import {
+  loadTikTokConnection,
+  postToTikTok,
+  postPhotosToTikTok,
+  tiktokUserInfo,
+} from "./tiktok";
 import { loadYouTubeConnection, postToYouTube, checkYouTube } from "./youtube";
-import { saveDataUrl, validateDataUrl, isAllowedMediaUrl } from "./media";
+import { saveDataUrl, validateDataUrl, isAllowedMediaUrl, appMediaUrl } from "./media";
+import { IG_CAROUSEL_MAX } from "./ig-media";
 import {
   normalizeTargets,
   fullText,
@@ -80,9 +89,24 @@ export interface MediaInput {
  * Gooit een Error met een Nederlandse melding (→ 400).
  */
 export async function resolveMediaInput(
-  media: MediaInput | null | undefined,
+  media: MediaInput | MediaInput[] | null | undefined,
   dryRun: boolean,
-): Promise<{ url: string; type: MediaKind } | undefined> {
+): Promise<{ url: string; type: MediaKind; urls?: string[] } | undefined> {
+  // Carrousel: lijst met foto-URL's (2–10, alleen foto's).
+  if (Array.isArray(media)) {
+    if (media.length === 1) return resolveMediaInput(media[0], dryRun);
+    if (media.length < 2 || media.length > IG_CAROUSEL_MAX) {
+      throw new Error(`Een carrousel heeft 2 t/m ${IG_CAROUSEL_MAX} foto's`);
+    }
+    const urls: string[] = [];
+    for (const m of media) {
+      if (!m || typeof m !== "object" || m.type !== "image" || !isAllowedMediaUrl(m.url)) {
+        throw new Error("Carrousel: alleen foto's met een geldige media-URL");
+      }
+      urls.push(m.url);
+    }
+    return { url: urls[0], type: "image", urls };
+  }
   if (!media || typeof media !== "object") return undefined;
   const type: MediaKind = media.type === "image" ? "image" : "video";
 
@@ -131,6 +155,8 @@ export async function publishForAccount(opts: {
   accountId: string;
   mediaUrl?: string;
   mediaType?: MediaKind;
+  /** Carrousel: alle foto-URL's op volgorde (mediaUrl = de eerste). */
+  mediaUrls?: string[];
   targets: PublishTargets;
   captions: PublishCaptions;
   dryRun?: boolean;
@@ -152,6 +178,10 @@ export async function publishForAccount(opts: {
       : "video"
     : undefined;
   const media = mediaUrl && kind ? { url: mediaUrl, kind } : undefined;
+  /** Foto's van deze post (1 bij een losse foto, 2–10 bij een carrousel). */
+  const images =
+    kind === "image" ? (opts.mediaUrls?.length ? opts.mediaUrls : [mediaUrl!]) : [];
+  const carousel = images.length > 1;
 
   const { targets, dropped } = normalizeTargets(opts.targets, kind);
 
@@ -303,7 +333,9 @@ export async function publishForAccount(opts: {
       () => viaMeta(() => checkFacebookPage(page!, CHECK_TIMEOUT_MS)),
       async () => {
         const r = await viaMeta(() =>
-          postToFacebookPage(page!, fullText(captions.facebook), media),
+          carousel
+            ? postAlbumToFacebookPage(page!, fullText(captions.facebook), images)
+            : postToFacebookPage(page!, fullText(captions.facebook), media),
         );
         return { id: r.id, url: r.url };
       },
@@ -322,6 +354,9 @@ export async function publishForAccount(opts: {
         const directOk = Boolean(igConn && !igDirectDead);
         if (!directOk && !pageIgUsable()) return expiredMessage("Instagram");
         if (!media) return "Instagram heeft een foto of video nodig";
+        if (carousel && targets.instagram?.includes("story")) {
+          return "Een carrousel kan niet als story";
+        }
         return null;
       },
       () =>
@@ -331,6 +366,13 @@ export async function publishForAccount(opts: {
         ),
       async (placement) => {
         const caption = fullText(captions.instagram);
+        if (carousel) {
+          const r = await igWithFallback(
+            () => postCarouselToInstagramDirect(igConn!, images, caption),
+            () => postCarouselToInstagram(igId!, page!.accessToken, images, caption),
+          );
+          return { id: r.id, url: r.permalink };
+        }
         // Na normalisatie: story | reel (video) | feed (foto)
         const plc =
           placement === "story" ? "story" : media!.kind === "video" ? "reel" : "feed";
@@ -349,7 +391,7 @@ export async function publishForAccount(opts: {
       () => {
         if (!ttConn) return "Geen TikTok-account gekoppeld";
         if (ttConn.status === "needs_reauth") return expiredMessage("TikTok");
-        if (!media || media.kind !== "video") return "TikTok heeft een video nodig";
+        if (!media) return "TikTok heeft een video of foto nodig";
         return null;
       },
       async () => {
@@ -359,6 +401,16 @@ export async function publishForAccount(opts: {
         });
       },
       async () => {
+        if (media!.kind === "image") {
+          // Fotopost: TikTok haalt de foto's op via ons geverifieerde domein.
+          const r = await postPhotosToTikTok(
+            ttConn!,
+            images.map(appMediaUrl),
+            fullText(captions.tiktok),
+            captions.tiktok?.title,
+          );
+          return { id: r.id, note: "fotopost" };
+        }
         const r = await postToTikTok(ttConn!, media!.url, fullText(captions.tiktok));
         return { id: r.id };
       },

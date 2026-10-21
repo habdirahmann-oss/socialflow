@@ -1,6 +1,6 @@
 import { kvGet, kvSet, kvUpdate, withLock } from "./store";
 import { APP_URL } from "./config";
-import { publishIgMedia, type IgPlacement } from "./ig-media";
+import { publishIgMedia, publishIgCarousel, type IgPlacement } from "./ig-media";
 import { fetchJson } from "./http";
 import {
   DAY_MS,
@@ -309,5 +309,19 @@ export async function postToInstagramDirect(
     caption,
     placement,
     deadline,
+  });
+}
+
+export async function postCarouselToInstagramDirect(
+  conn: IgConnection,
+  imageUrls: string[],
+  caption: string,
+): Promise<{ id: string; permalink?: string }> {
+  return publishIgCarousel({
+    base: "https://graph.instagram.com",
+    igId: conn.igUserId,
+    token: conn.token,
+    imageUrls,
+    caption,
   });
 }

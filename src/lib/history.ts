@@ -205,6 +205,8 @@ export interface DirectPublishInput {
   subject: string;
   mediaUrl?: string;
   mediaType?: MediaKind;
+  /** Carrousel: alle foto-URL's. */
+  mediaUrls?: string[];
   /** Al genormaliseerd (alleen wat met deze media kan). */
   targets: PublishTargets;
   /** Zoals de client ze stuurde (voor publishForAccount). */
@@ -254,6 +256,7 @@ export async function publishDirectWithHistory(
       accountId: input.accountId,
       mediaUrl: input.mediaUrl,
       mediaType: input.mediaType,
+      mediaUrls: input.mediaUrls,
       targets: input.requestedTargets,
       captions: input.captions,
       dryRun: input.dryRun,

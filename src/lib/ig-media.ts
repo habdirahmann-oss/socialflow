@@ -104,6 +104,82 @@ export async function publishIgMedia(opts: {
   return { id: published.id, permalink };
 }
 
+/** Instagram: max. 10 items per carrousel. */
+export const IG_CAROUSEL_MAX = 10;
+
+/**
+ * Carrousel (2–10 foto's) in de feed: per foto een child-container
+ * (is_carousel_item), daarna één CAROUSEL-container met de caption en publiceren.
+ */
+export async function publishIgCarousel(opts: {
+  base: string;
+  igId: string;
+  token: string;
+  imageUrls: string[];
+  caption: string;
+}): Promise<{ id: string; permalink?: string }> {
+  const { base, igId, token, imageUrls, caption } = opts;
+  if (imageUrls.length < 2 || imageUrls.length > IG_CAROUSEL_MAX) {
+    throw new Error(`IG-carrousel: 2 t/m ${IG_CAROUSEL_MAX} foto's nodig`);
+  }
+  const children: string[] = [];
+  for (const [i, url] of imageUrls.entries()) {
+    const child = await fetchJson<{ id?: string }>(
+      `${base}/${igId}/media`,
+      {
+        method: "POST",
+        body: new URLSearchParams({
+          access_token: token,
+          image_url: url,
+          is_carousel_item: "true",
+        }),
+      },
+      { label: `IG carrousel-foto ${i + 1}` },
+    );
+    if (!child.id) throw new Error(`IG carrousel-foto ${i + 1}: geen id ontvangen`);
+    children.push(child.id);
+  }
+
+  const parent = await fetchJson<{ id?: string }>(
+    `${base}/${igId}/media`,
+    {
+      method: "POST",
+      body: new URLSearchParams({
+        access_token: token,
+        media_type: "CAROUSEL",
+        children: children.join(","),
+        caption,
+      }),
+    },
+    { label: "IG carrousel-container" },
+  );
+  if (!parent.id) throw new Error("IG carrousel-container: geen id ontvangen");
+  await waitForContainer(base, parent.id, token, 60_000);
+
+  const published = await fetchJson<{ id?: string }>(
+    `${base}/${igId}/media_publish`,
+    {
+      method: "POST",
+      body: new URLSearchParams({ creation_id: parent.id, access_token: token }),
+    },
+    { label: "IG publiceren" },
+  );
+  if (!published.id) throw new Error("IG publiceren: geen media-id ontvangen");
+
+  let permalink: string | undefined;
+  try {
+    const info = await fetchJson<{ permalink?: string }>(
+      `${base}/${published.id}?${new URLSearchParams({ fields: "permalink", access_token: token })}`,
+      {},
+      { label: "IG permalink", timeoutMs: 10_000 },
+    );
+    permalink = typeof info.permalink === "string" ? info.permalink : undefined;
+  } catch {
+    permalink = undefined;
+  }
+  return { id: published.id, permalink };
+}
+
 /** Poll de container-status tot FINISHED, binnen een budget (max 150 s). */
 async function waitForContainer(
   base: string,
