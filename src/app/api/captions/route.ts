@@ -252,7 +252,7 @@ Kwaliteitsregels (belangrijk):
 - Geen clichés of vulzinnen. Als het op elke willekeurige post zou passen, herschrijf het.
 - Natuurlijk Nederlands — geen letterlijke vertaling, geen stijve AI-taal.
 - Emoji spaarzaam en met smaak.
-- Gebruik GEEN streepjes (—, – of -) tussen tekst of zinsdelen. Gebruik een komma, punt of dubbele punt, of begin een nieuwe zin.
+- Gebruik NOOIT een streepje (-, – of —), nergens in de tekst: niet tussen zinsdelen, niet in woorden (schrijf 'email', niet 'e-mail') en niet als opsommingsteken. Gebruik een komma, punt of dubbele punt, of begin een nieuwe zin.
 - Hashtags: relevant en gemengd (een paar breed + een paar niche), geen spam, exact het gevraagde aantal.
 
 Geef per platform:
