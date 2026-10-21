@@ -1,0 +1,27 @@
+name: Ingeplande posts versturen
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: socialflow-cron
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Cron-endpoint aanroepen
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo 'CRON_SECRET niet gezet, overslaan'
+            exit 0
+          fi
+          curl -fsS -m 290 -H "Authorization: Bearer $CRON_SECRET" https://socialflow-amber.vercel.app/api/cron/publish
