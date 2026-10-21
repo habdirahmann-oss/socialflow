@@ -128,9 +128,10 @@ export default function Page() {
   // Instagram: feed/reel is één keuze die automatisch meeschakelt (video → Reel,
   // foto → Feed); Story is optioneel. YouTube: Short óf Video.
   const [igMain, setIgMain] = useState(true);
-  // Story staat standaard aan: elke post gaat ook als story (uit te zetten per post).
-  const [igStory, setIgStory] = useState(true);
-  const [fbStory, setFbStory] = useState(true);
+  // Story staat standaard uit: een losse story is niet klikbaar naar de post.
+  // De post zelf op je story delen kan alleen in de Instagram-app (zie ResultPanel).
+  const [igStory, setIgStory] = useState(false);
+  const [fbStory, setFbStory] = useState(false);
   const [ytMode, setYtMode] = useState<"short" | "video">("short");
 
   /* ---------------- Toast ---------------- */

@@ -33,6 +33,10 @@ export function ResultPanel({
   const okCount = state.results.filter((r) => r.ok).length;
   const failed = state.results.filter((r) => !r.ok);
   const allOk = state.results.length > 0 && failed.length === 0 && !state.error;
+  /** Geslaagde Instagram feed-post/Reel: herinnering om 'm zelf op de story te delen. */
+  const igPost = state.results.find(
+    (r) => r.ok && r.platform === "instagram" && r.placement !== "story",
+  );
   const tone = allOk
     ? "border-accent/40 bg-accent/10"
     : okCount > 0
@@ -105,6 +109,25 @@ export function ResultPanel({
             </li>
           ))}
         </ul>
+      )}
+
+      {igPost?.url && (
+        <div className="mt-3 rounded-lg border border-brand/40 bg-brand/10 px-3 py-2 text-xs">
+          <p className="font-medium">📲 Zet de post nu op je Instagram-story</p>
+          <p className="mt-0.5 text-muted">
+            Open de post in de Instagram-app, tik op het vliegtuigje en kies{" "}
+            <span className="text-foreground">Post toevoegen aan je verhaal</span>. Dan kunnen
+            kijkers op je story doortikken naar de post.
+          </p>
+          <a
+            href={igPost.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1.5 inline-block text-brand underline-offset-2 hover:underline"
+          >
+            Open de post ↗
+          </a>
+        </div>
       )}
 
       {state.dropped.length > 0 && (
