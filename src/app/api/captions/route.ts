@@ -1,3 +1,4 @@
+import { stripDashes } from "@/lib/caption-text";
 import { NextResponse } from "next/server";
 import {
   PLATFORM_MAP,
@@ -251,6 +252,7 @@ Kwaliteitsregels (belangrijk):
 - Geen clichés of vulzinnen. Als het op elke willekeurige post zou passen, herschrijf het.
 - Natuurlijk Nederlands — geen letterlijke vertaling, geen stijve AI-taal.
 - Emoji spaarzaam en met smaak.
+- Gebruik GEEN streepjes (—, – of -) tussen tekst of zinsdelen. Gebruik een komma, punt of dubbele punt, of begin een nieuwe zin.
 - Hashtags: relevant en gemengd (een paar breed + een paar niche), geen spam, exact het gevraagde aantal.
 
 Geef per platform:
@@ -337,7 +339,13 @@ function finalize(result: Captions, ctx: PromptContext): Captions {
     } else {
       title = "";
     }
-    out[pid] = { ...c, title, hashtags };
+    out[pid] = {
+      ...c,
+      title: stripDashes(title),
+      caption: stripDashes(c.caption),
+      story: stripDashes(c.story || ""),
+      hashtags,
+    };
   }
   return out;
 }
