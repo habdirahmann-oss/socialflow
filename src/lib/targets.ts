@@ -109,7 +109,10 @@ export function normalizeTargets(
       case "facebook":
         for (const plc of list) {
           if (plc === "feed") add("feed");
-          else if (plc === "story") drop(platform, plc, REASON.unsupported);
+          else if (plc === "story") {
+            if (mediaKind) add("story");
+            else drop(platform, plc, REASON.needsMedia);
+          }
           else drop(platform, plc, REASON.unknownPlacement);
         }
         break;

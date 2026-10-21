@@ -1,7 +1,7 @@
 import { kvGet, kvUpdate } from "./store";
 import { APP_URL } from "./config";
 import { publishIgMedia, publishIgCarousel, type IgPlacement } from "./ig-media";
-import { fetchJson, MEDIA_TIMEOUT_MS } from "./http";
+import { fetchJson, fetchRaw, MEDIA_TIMEOUT_MS } from "./http";
 import {
   DAY_MS,
   errorText,
@@ -512,6 +512,62 @@ export async function postAlbumToFacebookPage(
   );
   if (!data.id) throw new Error("Facebook gaf geen post-id terug");
   return { id: data.id, url: `https://www.facebook.com/${data.id}` };
+}
+
+/**
+ * Facebook-paginastory (foto of video, max. 1 item).
+ * Foto: ongepubliceerd uploaden → /photo_stories.
+ * Video: /video_stories start → Facebook haalt de video op (file_url) → finish.
+ */
+export async function postStoryToFacebookPage(
+  page: MetaPage,
+  media: { url: string; kind: "image" | "video" },
+): Promise<{ id: string }> {
+  const token = page.accessToken;
+  if (media.kind === "image") {
+    const photo = await fetchJson<{ id?: string }>(
+      graphUrl(`/${page.id}/photos`),
+      {
+        method: "POST",
+        body: new URLSearchParams({ access_token: token, url: media.url, published: "false" }),
+      },
+      { label: "Facebook story-foto", timeoutMs: 60_000 },
+    );
+    if (!photo.id) throw new Error("Facebook story-foto: geen id ontvangen");
+    const story = await fetchJson<{ post_id?: string }>(
+      graphUrl(`/${page.id}/photo_stories`),
+      { method: "POST", body: new URLSearchParams({ access_token: token, photo_id: photo.id }) },
+      { label: "Facebook story" },
+    );
+    return { id: story.post_id || photo.id };
+  }
+
+  const start = await fetchJson<{ video_id?: string; upload_url?: string }>(
+    graphUrl(`/${page.id}/video_stories`),
+    { method: "POST", body: new URLSearchParams({ access_token: token, upload_phase: "start" }) },
+    { label: "Facebook story-video start" },
+  );
+  if (!start.video_id || !start.upload_url) {
+    throw new Error("Facebook story-video: geen upload-adres ontvangen");
+  }
+  await fetchRaw(
+    start.upload_url,
+    { method: "POST", headers: { authorization: `OAuth ${token}`, file_url: media.url } },
+    { label: "Facebook story-video upload" },
+  );
+  const done = await fetchJson<{ post_id?: string }>(
+    graphUrl(`/${page.id}/video_stories`),
+    {
+      method: "POST",
+      body: new URLSearchParams({
+        access_token: token,
+        upload_phase: "finish",
+        video_id: start.video_id,
+      }),
+    },
+    { label: "Facebook story-video publiceren", timeoutMs: MEDIA_TIMEOUT_MS },
+  );
+  return { id: done.post_id || start.video_id };
 }
 
 /** Lees-only controle (testmodus): werkt het pagina-token nog? */

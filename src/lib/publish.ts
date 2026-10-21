@@ -7,6 +7,7 @@ import {
   checkInstagramViaPage,
   markMetaNeedsReauth,
   postAlbumToFacebookPage,
+  postStoryToFacebookPage,
   postCarouselToInstagram,
   needsPageChoice,
   PAGE_CHOICE_REQUIRED,
@@ -335,7 +336,14 @@ export async function publishForAccount(opts: {
         return null;
       },
       () => viaMeta(() => checkFacebookPage(page!, CHECK_TIMEOUT_MS)),
-      async () => {
+      async (placement) => {
+        if (placement === "story") {
+          // Story = één item; bij een carrousel de eerste foto.
+          const r = await viaMeta(() =>
+            postStoryToFacebookPage(page!, carousel ? { url: images[0], kind: "image" } : media!),
+          );
+          return { id: r.id };
+        }
         const r = await viaMeta(() =>
           carousel
             ? postAlbumToFacebookPage(page!, fullText(captions.facebook), images)
@@ -358,9 +366,6 @@ export async function publishForAccount(opts: {
         const directOk = Boolean(igConn && !igDirectDead);
         if (!directOk && !pageIgUsable()) return expiredMessage("Instagram");
         if (!media) return "Instagram heeft een foto of video nodig";
-        if (carousel && targets.instagram?.includes("story")) {
-          return "Een carrousel kan niet als story";
-        }
         return null;
       },
       () =>
@@ -370,7 +375,7 @@ export async function publishForAccount(opts: {
         ),
       async (placement) => {
         const caption = fullText(captions.instagram);
-        if (carousel) {
+        if (carousel && placement !== "story") {
           const r = await igWithFallback(
             () => postCarouselToInstagramDirect(igConn!, images, caption),
             () => postCarouselToInstagram(igId!, page!.accessToken, images, caption),
@@ -380,9 +385,11 @@ export async function publishForAccount(opts: {
         // Na normalisatie: story | reel (video) | feed (foto)
         const plc =
           placement === "story" ? "story" : media!.kind === "video" ? "reel" : "feed";
+        // Story bij een carrousel: de eerste foto.
+        const item = carousel ? { url: images[0], kind: "image" as const } : media!;
         const r = await igWithFallback(
-          () => postToInstagramDirect(igConn!, media!, caption, plc, deadline),
-          () => postToInstagram(igId!, page!.accessToken, media!, caption, plc, deadline),
+          () => postToInstagramDirect(igConn!, item, caption, plc, deadline),
+          () => postToInstagram(igId!, page!.accessToken, item, caption, plc, deadline),
         );
         return { id: r.id, url: r.permalink };
       },

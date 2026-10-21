@@ -187,7 +187,11 @@ function placementLines(ctx: PromptContext): string[] {
         }
         break;
       case "tiktok":
-        lines.push("- tiktok: een TikTok-video");
+        lines.push(
+          ctx.mediaType === "image"
+            ? "- tiktok: een TikTok-fotopost (swipebare foto's)"
+            : "- tiktok: een TikTok-video",
+        );
         break;
       case "facebook":
         lines.push(
@@ -197,7 +201,7 @@ function placementLines(ctx: PromptContext): string[] {
               : ctx.mediaType === "image"
                 ? "een post met foto"
                 : "een tekstpost zonder media"
-          }`,
+          }${plc.includes("story") ? ", plus een Story ('story' = korte overlay-zin)" : ""}`,
         );
         break;
     }

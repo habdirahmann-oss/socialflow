@@ -128,7 +128,9 @@ export default function Page() {
   // Instagram: feed/reel is één keuze die automatisch meeschakelt (video → Reel,
   // foto → Feed); Story is optioneel. YouTube: Short óf Video.
   const [igMain, setIgMain] = useState(true);
-  const [igStory, setIgStory] = useState(false);
+  // Story staat standaard aan: elke post gaat ook als story (uit te zetten per post).
+  const [igStory, setIgStory] = useState(true);
+  const [fbStory, setFbStory] = useState(true);
   const [ytMode, setYtMode] = useState<"short" | "video">("short");
 
   /* ---------------- Toast ---------------- */
@@ -452,7 +454,7 @@ export default function Page() {
   const rawTargets = (): PlacementsByPlatform => {
     const raw: PlacementsByPlatform = {};
     const sel = selected;
-    if (sel.has("facebook")) raw.facebook = ["feed"];
+    if (sel.has("facebook")) raw.facebook = fbStory && mediaKind ? ["feed", "story"] : ["feed"];
     if (sel.has("tiktok")) raw.tiktok = ["feed"];
     if (sel.has("youtube")) raw.youtube = [ytMode];
     if (sel.has("instagram")) {
@@ -1158,6 +1160,19 @@ export default function Page() {
                               <span className="text-[10px] text-muted">
                                 video → Reel · foto → Feed
                               </span>
+                            </>
+                          )}
+                          {p.id === "facebook" && (
+                            <>
+                              <PlacementChip active onClick={() => {}}>
+                                Post
+                              </PlacementChip>
+                              <PlacementChip active={fbStory} onClick={() => setFbStory(!fbStory)}>
+                                Story
+                              </PlacementChip>
+                              {!mediaKind && (
+                                <span className="text-[10px] text-muted">story alleen met foto/video</span>
+                              )}
                             </>
                           )}
                           {p.id === "youtube" && (
