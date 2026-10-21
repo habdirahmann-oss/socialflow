@@ -1,5 +1,6 @@
 import type { ScheduledPost, ScheduledStatus } from "./schedule";
 import type { PublishCaptions } from "./publish";
+import { parseTikTokSettings } from "./tiktok-settings";
 
 /**
  * Gedeelde API-weergave voor ingeplande posts én geschiedenis-entries
@@ -81,6 +82,9 @@ export function parseCaptions(v: unknown): PublishCaptions | null {
       story: str(c.story) ?? "",
       ...(typeof c.title === "string" ? { title: str(c.title) } : {}),
       hashtags,
+      ...(k === "tiktok" && parseTikTokSettings(c.tiktok)
+        ? { tiktok: parseTikTokSettings(c.tiktok) }
+        : {}),
     };
   }
   return out as PublishCaptions;

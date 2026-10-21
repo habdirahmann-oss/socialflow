@@ -2,6 +2,11 @@ import { kvGet, kvSet, kvUpdate, withLock } from "./store";
 import { APP_URL } from "./config";
 import { fetchJson, fetchRaw, downloadBuffer, sleep, MEDIA_TIMEOUT_MS, HttpError } from "./http";
 import {
+  parseTikTokSettings,
+  type TikTokCreatorInfo,
+  type TikTokPostSettings,
+} from "./tiktok-settings";
+import {
   REFRESH_LOCK,
   errorText,
   isTransientError,
@@ -244,12 +249,23 @@ export function tiktokChunkPlan(size: number): { chunkSize: number; total: numbe
   return { chunkSize, total };
 }
 
-/**
- * Vraagt de zichtbaarheidsopties van de maker op. Kiest openbaar als dat mag;
- * een niet-goedgekeurde app krijgt alleen SELF_ONLY terug en post dan privé.
- */
-export async function tiktokPrivacyLevel(conn: TikTokConnection): Promise<string> {
-  const info = await fetchJson<{ data?: { privacy_level_options?: string[] } }>(
+/** Gegevens en mogelijkheden van de maker (verplicht vóór Direct Post). */
+export async function tiktokCreatorInfo(
+  conn: TikTokConnection,
+  timeoutMs?: number,
+): Promise<TikTokCreatorInfo> {
+  const info = await fetchJson<{
+    data?: {
+      creator_nickname?: string;
+      creator_username?: string;
+      creator_avatar_url?: string;
+      privacy_level_options?: string[];
+      comment_disabled?: boolean;
+      duet_disabled?: boolean;
+      stitch_disabled?: boolean;
+      max_video_post_duration_sec?: number;
+    };
+  }>(
     "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
     {
       method: "POST",
@@ -258,11 +274,69 @@ export async function tiktokPrivacyLevel(conn: TikTokConnection): Promise<string
         "content-type": "application/json; charset=UTF-8",
       },
     },
-    { label: "TikTok creator-info" },
+    { label: "TikTok creator-info", timeoutMs },
   );
-  const options = info.data?.privacy_level_options ?? [];
-  if (options.includes("PUBLIC_TO_EVERYONE")) return "PUBLIC_TO_EVERYONE";
-  return options[0] ?? "SELF_ONLY";
+  const d = info.data ?? {};
+  return {
+    nickname: d.creator_nickname || conn.displayName,
+    username: d.creator_username || "",
+    avatarUrl: d.creator_avatar_url || "",
+    privacyOptions: d.privacy_level_options ?? [],
+    commentDisabled: Boolean(d.comment_disabled),
+    duetDisabled: Boolean(d.duet_disabled),
+    stitchDisabled: Boolean(d.stitch_disabled),
+    maxVideoSeconds: d.max_video_post_duration_sec || 0,
+  };
+}
+
+/** Wat er in post_info meegaat, op basis van de keuzes van de maker. */
+interface TikTokPostInfo {
+  privacy_level: string;
+  disable_comment: boolean;
+  disable_duet?: boolean;
+  disable_stitch?: boolean;
+  brand_content_toggle: boolean;
+  brand_organic_toggle: boolean;
+}
+
+/**
+ * Zet de keuzes van de maker om naar post_info en controleert ze tegen
+ * creator_info. Zonder keuzes (oude ingeplande posts) → openbaar als dat mag,
+ * reacties aan.
+ */
+async function resolvePostInfo(
+  conn: TikTokConnection,
+  raw: unknown,
+  kind: "video" | "photo",
+): Promise<TikTokPostInfo> {
+  const info = await tiktokCreatorInfo(conn);
+  const s: TikTokPostSettings | undefined = parseTikTokSettings(raw);
+  const options = info.privacyOptions;
+  let privacy: string;
+  if (s) {
+    if (!options.includes(s.privacy)) {
+      throw new Error("TikTok: deze zichtbaarheid is voor dit account niet beschikbaar");
+    }
+    if (s.brandedContent && s.privacy === "SELF_ONLY") {
+      throw new Error("TikTok: branded content kan niet op 'Alleen ik' staan");
+    }
+    privacy = s.privacy;
+  } else {
+    privacy = options.includes("PUBLIC_TO_EVERYONE")
+      ? "PUBLIC_TO_EVERYONE"
+      : options[0] ?? "SELF_ONLY";
+  }
+  const out: TikTokPostInfo = {
+    privacy_level: privacy,
+    disable_comment: info.commentDisabled || (s ? !s.allowComment : false),
+    brand_content_toggle: Boolean(s?.brandedContent),
+    brand_organic_toggle: Boolean(s?.yourBrand),
+  };
+  if (kind === "video") {
+    out.disable_duet = info.duetDisabled || (s ? !s.allowDuet : false);
+    out.disable_stitch = info.stitchDisabled || (s ? !s.allowStitch : false);
+  }
+  return out;
 }
 
 /**
@@ -277,6 +351,7 @@ export async function postToTikTok(
   conn: TikTokConnection,
   videoUrl: string,
   caption: string,
+  settings?: unknown,
 ): Promise<{ id: string; draft?: boolean }> {
   // 1. video ophalen (uit onze eigen opslag)
   const { buffer: video, contentType } = await downloadBuffer(videoUrl, {
@@ -286,9 +361,8 @@ export async function postToTikTok(
   if (!size) throw new Error("Video ophalen: leeg bestand");
   const { chunkSize, total } = tiktokChunkPlan(size);
 
-  // 2. toegestane zichtbaarheid opvragen (verplicht vóór Direct Post).
-  //    Openbaar als TikTok dat toestaat (app goedgekeurd), anders de eerste optie.
-  const privacy = await tiktokPrivacyLevel(conn);
+  // 2. creator_info + de keuzes van de maker (verplicht vóór Direct Post)
+  const postInfo = await resolvePostInfo(conn, settings, "video");
 
   // 3. upload initialiseren (zonder Direct Post-audit: als concept naar de inbox)
   const sourceInfo = {
@@ -310,7 +384,7 @@ export async function postToTikTok(
         method: "POST",
         headers,
         body: JSON.stringify({
-          post_info: { title: caption.slice(0, 2200), privacy_level: privacy },
+          post_info: { title: caption.slice(0, 2200), ...postInfo },
           source_info: sourceInfo,
         }),
       },
@@ -368,11 +442,12 @@ export async function postPhotosToTikTok(
   imageUrls: string[],
   caption: string,
   title?: string,
+  settings?: unknown,
 ): Promise<{ id: string; draft?: boolean }> {
   if (!imageUrls.length || imageUrls.length > TIKTOK_PHOTO_MAX) {
     throw new Error(`TikTok-fotopost: 1 t/m ${TIKTOK_PHOTO_MAX} foto's nodig`);
   }
-  const init = (direct: boolean, privacy?: string) =>
+  const init = (direct: boolean, postInfo?: TikTokPostInfo) =>
     fetchJson<{ data?: { publish_id?: string } }>(
       "https://open.tiktokapis.com/v2/post/publish/content/init/",
       {
@@ -385,7 +460,7 @@ export async function postPhotosToTikTok(
           post_info: {
             title: (title || caption.split("\n")[0] || "").slice(0, 90),
             description: caption.slice(0, 4000),
-            ...(direct ? { privacy_level: privacy } : {}),
+            ...(direct ? postInfo : {}),
             auto_add_music: true,
           },
           source_info: {
@@ -402,7 +477,7 @@ export async function postPhotosToTikTok(
   let draft = false;
   let res: { data?: { publish_id?: string } };
   try {
-    res = await init(true, await tiktokPrivacyLevel(conn));
+    res = await init(true, await resolvePostInfo(conn, settings, "photo"));
   } catch (e) {
     if (!isUnaudited(e)) throw e;
     // Zonder Direct Post-audit: als concept naar de TikTok-inbox van de maker.

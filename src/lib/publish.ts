@@ -419,10 +419,16 @@ export async function publishForAccount(opts: {
             images.map(appMediaUrl),
             fullText(captions.tiktok),
             captions.tiktok?.title,
+            captions.tiktok?.tiktok,
           );
           return { id: r.id, note: r.draft ? TIKTOK_DRAFT_NOTE : "fotopost" };
         }
-        const r = await postToTikTok(ttConn!, media!.url, fullText(captions.tiktok));
+        const r = await postToTikTok(
+          ttConn!,
+          media!.url,
+          fullText(captions.tiktok),
+          captions.tiktok?.tiktok,
+        );
         return { id: r.id, note: r.draft ? TIKTOK_DRAFT_NOTE : undefined };
       },
     ),

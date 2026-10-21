@@ -5,6 +5,7 @@
  * worden staan hier.
  */
 import type { PlacementId, PlatformId } from "./platforms";
+import type { TikTokPostSettings } from "./tiktok-settings";
 
 /** Soort media van een post. */
 export type MediaKind = "image" | "video";
@@ -20,6 +21,8 @@ export interface PlatformCaption {
   story: string;
   /** Losse hashtags zonder '#'. */
   hashtags: string[];
+  /** Alleen TikTok: de keuzes van de maker (zichtbaarheid, reacties, reclame). */
+  tiktok?: TikTokPostSettings;
 }
 
 /** Captions per kanaal. Gebruik `Partial<CaptionResult>` als niet alle kanalen er zijn. */

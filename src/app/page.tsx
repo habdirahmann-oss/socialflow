@@ -56,6 +56,14 @@ import {
 import { CaptionEditor, PhonePreview } from "./_components/previews";
 import { ConfirmModal, type ModalMode, type ModalState } from "./_components/ConfirmModal";
 import { ResultPanel, type ResultPanelState } from "./_components/ResultPanel";
+import {
+  EMPTY_TIKTOK_DRAFT,
+  TikTokSettingsPanel,
+  tiktokDraftProblem,
+  tiktokSettingsFromDraft,
+  useTikTokCreator,
+  type TikTokDraft,
+} from "./_components/TikTokSettings";
 
 /** YouTube Shorts: max. 3 minuten. */
 const YT_SHORT_MAX_S = 180;
@@ -132,7 +140,10 @@ export default function Page() {
   // De post zelf op je story delen kan alleen in de Instagram-app (zie ResultPanel).
   const [igStory, setIgStory] = useState(false);
   const [fbStory, setFbStory] = useState(false);
+  // TikTok: de maker kiest per post zelf (geen standaard-zichtbaarheid).
+  const [ttDraft, setTtDraft] = useState<TikTokDraft>(EMPTY_TIKTOK_DRAFT);
   const [ytMode, setYtMode] = useState<"short" | "video">("short");
+  const ttCreator = useTikTokCreator(accountId, selected.has("tiktok"));
 
   /* ---------------- Toast ---------------- */
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -183,6 +194,7 @@ export default function Page() {
    * wissen we ze — anders gaat de tekst van klant A naar de kanalen van klant B.
    */
   const changeAccount = (id: string) => {
+    setTtDraft(EMPTY_TIKTOK_DRAFT);
     if (id === accountIdRef.current) return;
     const hasAny = Object.keys(captions).length > 0;
     if (hasAny || loading || genFor) {
@@ -582,6 +594,10 @@ export default function Page() {
     const reason = channelBlockReason(p.id, mediaKind);
     if (reason) missing.push(`${p.name}: ${reason}`);
   }
+  if (selected.has("tiktok")) {
+    const problem = tiktokDraftProblem(ttDraft, ttCreator.info, media?.duration);
+    if (problem) missing.push(problem);
+  }
   if (selected.has("instagram") && !igMain && !igStory) {
     missing.push("Instagram: kies een plaatsing");
   }
@@ -599,6 +615,7 @@ export default function Page() {
     for (const p of CHANNEL_ORDER) {
       if (selected.has(p) && captions[p]) out[p] = captions[p];
     }
+    if (out.tiktok) out.tiktok = { ...out.tiktok, tiktok: tiktokSettingsFromDraft(ttDraft) };
     return out;
   };
   // Alleen de publieke URL gaat mee (de upload is al klaar) → kleine JSON-body.
@@ -786,6 +803,7 @@ export default function Page() {
   };
 
   const newPost = () => {
+    setTtDraft(EMPTY_TIKTOK_DRAFT);
     removeMedia();
     setCaptions({});
     setEdited(new Set());
@@ -1162,6 +1180,17 @@ export default function Page() {
                                 video → Reel · foto → Feed
                               </span>
                             </>
+                          )}
+                          {p.id === "tiktok" && (
+                            <div className="w-full">
+                              <TikTokSettingsPanel
+                                draft={ttDraft}
+                                onChange={setTtDraft}
+                                info={ttCreator.info}
+                                error={ttCreator.error}
+                                mediaKind={mediaKind}
+                              />
+                            </div>
                           )}
                           {p.id === "facebook" && (
                             <>
