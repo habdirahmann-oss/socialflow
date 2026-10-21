@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PLATFORM_MAP } from "@/lib/platforms";
-import LogoutLink from "@/components/LogoutLink";
+import AppNav from "@/components/AppNav";
 import type { AccountInfo, AccountsResponse, ChannelHealth } from "@/lib/types";
 
 /** Vaste Nederlandse teksten voor bekende `reden`-waarden uit de callbacks. */
@@ -181,7 +181,7 @@ function Inner() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
+        <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           <Link href="/" className="flex items-center gap-2.5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.png" alt="SocialFlow" className="h-9 w-9 rounded-xl" />
@@ -190,21 +190,7 @@ function Inner() {
               <p className="text-[11px] text-muted">verbindingen</p>
             </div>
           </Link>
-          <div className="flex items-center gap-3">
-            <LogoutLink />
-            <Link
-              href="/planning"
-              className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
-            >
-              🗓️ Planning
-            </Link>
-            <Link
-              href="/"
-              className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition hover:text-foreground"
-            >
-              ← Terug naar composer
-            </Link>
-          </div>
+          <AppNav active="/verbindingen" />
         </div>
       </header>
 

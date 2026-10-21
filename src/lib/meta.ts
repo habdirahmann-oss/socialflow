@@ -509,6 +509,7 @@ export async function postToInstagram(
   media: { url: string; kind: "image" | "video" },
   caption: string,
   placement: IgPlacement,
+  deadline?: number,
 ): Promise<{ id: string; permalink?: string }> {
   return publishIgMedia({
     base: `https://graph.facebook.com/${META.graph}`,
@@ -517,5 +518,6 @@ export async function postToInstagram(
     media,
     caption,
     placement,
+    deadline,
   });
 }

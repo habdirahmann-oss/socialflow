@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   authEnabled,
+  authMisconfigured,
+  MISSING_PASSWORD_ERROR,
   checkPassword,
   sanitizeNext,
   sessionToken,
@@ -32,6 +34,17 @@ export async function POST(req: Request) {
     nextRaw = form?.get("next") ?? "/";
   }
   const next = sanitizeNext(nextRaw);
+
+  // Wachtwoord verplicht maar niet ingesteld: niemand kan inloggen.
+  if (authMisconfigured()) {
+    if (isJson) {
+      return NextResponse.json({ error: MISSING_PASSWORD_ERROR }, { status: 503 });
+    }
+    const back = new URL("/login", req.url);
+    back.searchParams.set("fout", "config");
+    back.searchParams.set("next", next);
+    return NextResponse.redirect(back, 303);
+  }
 
   // Poort staat uit: niets te doen.
   if (!authEnabled()) {

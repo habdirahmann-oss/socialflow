@@ -98,6 +98,8 @@ export default function Page() {
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [accountId, setAccountId] = useState<string>("");
+  /** Telt caption-aanvragen; een antwoord van vóór een accountwissel wordt genegeerd. */
+  const captionReqRef = useRef(0);
   const [healthNow, setHealthNow] = useState(0);
   const [publishing, setPublishing] = useState(false);
   const [dryRun, setDryRun] = useState(false);
@@ -170,6 +172,37 @@ export default function Page() {
     const blocked = kind ? conn.filter((p) => channelBlockReason(p, kind)) : [];
     autoDroppedRef.current = new Set(blocked);
     commitSelected(new Set(conn.filter((p) => !blocked.includes(p))));
+  };
+
+  /**
+   * Wisselen via de dropdown. Captions worden per account gemaakt (merknaam,
+   * toon), dus bij een wissel met bestaande captions vragen we bevestiging en
+   * wissen we ze — anders gaat de tekst van klant A naar de kanalen van klant B.
+   */
+  const changeAccount = (id: string) => {
+    if (id === accountIdRef.current) return;
+    const hasAny = Object.keys(captions).length > 0;
+    if (hasAny || loading || genFor) {
+      const from = accountsRef.current.find((a) => a.id === accountIdRef.current)?.name || "dit account";
+      const to = accountsRef.current.find((a) => a.id === id)?.name || "het andere account";
+      if (
+        !window.confirm(
+          `De captions zijn gemaakt voor ${from}.\n\nBij wisselen naar ${to} worden ze gewist, zodat er geen tekst van de verkeerde klant geplaatst wordt. Doorgaan?`,
+        )
+      ) {
+        return;
+      }
+    }
+    // Lopende AI-aanvragen voor het oude account negeren.
+    captionReqRef.current++;
+    setLoading(false);
+    setGenFor(null);
+    setCaptions({});
+    setEdited(new Set());
+    setSource(null);
+    setActivePreview(null);
+    setResult(null);
+    selectAccount(id);
   };
 
   /* load accounts + koppelingsstatus; kies ?account= → onthouden → eerste */
@@ -475,8 +508,11 @@ export default function Page() {
     }
     setLoading(true);
     setSource(null);
+    const req = ++captionReqRef.current;
     try {
       const data = await requestCaptions(platforms);
+      // Intussen van account gewisseld → resultaat hoort bij het oude account.
+      if (req !== captionReqRef.current) return;
       if (data.result) {
         const res = data.result;
         setCaptions((c) => ({ ...c, ...res }));
@@ -491,9 +527,9 @@ export default function Page() {
         showToast(data.error || "Genereren mislukt");
       }
     } catch (e) {
-      showToast(errText(e, "Genereren mislukt"));
+      if (req === captionReqRef.current) showToast(errText(e, "Genereren mislukt"));
     } finally {
-      setLoading(false);
+      if (req === captionReqRef.current) setLoading(false);
     }
   };
 
@@ -501,8 +537,10 @@ export default function Page() {
   const generateFor = async (pid: PlatformId) => {
     if (genFor || loading) return;
     setGenFor(pid);
+    const req = ++captionReqRef.current;
     try {
       const data = await requestCaptions([pid]);
+      if (req !== captionReqRef.current) return;
       const c = data.result?.[pid];
       if (c) {
         setCaptions((prev) => ({ ...prev, [pid]: c }));
@@ -518,9 +556,9 @@ export default function Page() {
         showToast(data.error || "Genereren mislukt");
       }
     } catch (e) {
-      showToast(errText(e, "Genereren mislukt"));
+      if (req === captionReqRef.current) showToast(errText(e, "Genereren mislukt"));
     } finally {
-      setGenFor(null);
+      if (req === captionReqRef.current) setGenFor(null);
     }
   };
 
@@ -661,7 +699,7 @@ export default function Page() {
         if (data.ok) {
           setModal(null);
           showToast(
-            `Ingepland voor ${formatWhen(st.scheduledFor!)} — wordt binnen ~5 minuten na dat tijdstip geplaatst`,
+            `Ingepland voor ${formatWhen(st.scheduledFor!)} — wordt meestal binnen ~5–15 minuten na dat tijdstip geplaatst`,
             5000,
           );
           reloadOverview();
@@ -811,7 +849,7 @@ export default function Page() {
               {/* Eén account per post; multi-account posten valt buiten scope (captions/targets zijn per account). */}
               <select
                 value={accountId}
-                onChange={(e) => selectAccount(e.target.value)}
+                onChange={(e) => changeAccount(e.target.value)}
                 disabled={!accountsLoaded || accounts.length === 0}
                 aria-label="Account"
                 className="w-full rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 text-sm font-semibold outline-none focus:border-brand disabled:opacity-60"

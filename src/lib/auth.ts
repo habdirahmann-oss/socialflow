@@ -4,7 +4,9 @@
  * Gebruikt alleen Web Crypto (`crypto.subtle`), zodat dezelfde code werkt in
  * de proxy (src/proxy.ts) én in route handlers.
  *
- * - Zonder APP_PASSWORD staat de poort uit (lokaal ontwikkelen blijft vrij).
+ * - Zonder APP_PASSWORD staat de poort alleen uit bij lokaal ontwikkelen
+ *   (`next dev`). Op Vercel of in een productie-build faalt de poort dicht:
+ *   alles behalve de publieke paden geeft 503 'APP_PASSWORD ontbreekt'.
  * - De cookie bevat nooit het wachtwoord zelf, maar een HMAC ervan. Wijzig je
  *   het wachtwoord, dan zijn alle bestaande sessies direct ongeldig.
  */
@@ -15,8 +17,26 @@ export const SESSION_MAX_AGE = 60 * 60 * 24 * 365; // 1 jaar
 const SESSION_MESSAGE = "socialflow-session-v1";
 const encoder = new TextEncoder();
 
+/** Melding als de poort dicht staat omdat APP_PASSWORD ontbreekt. */
+export const MISSING_PASSWORD_ERROR =
+  "APP_PASSWORD ontbreekt: stel een wachtwoord in bij de Vercel-projectinstellingen (Environment Variables) en deploy opnieuw.";
+
+/** true als deze omgeving een wachtwoord vereist (Vercel of productie-build). */
+function passwordRequired(): boolean {
+  if (process.env.VERCEL) return true;
+  if (process.env.NODE_ENV !== "production") return false;
+  // Alleen lokaal (`next start` zonder Vercel) bewust uit te zetten.
+  return process.env.ALLOW_NO_AUTH !== "1";
+}
+
+/** true als APP_PASSWORD verplicht is maar ontbreekt: dan gaat alles dicht. */
+export function authMisconfigured(): boolean {
+  return !process.env.APP_PASSWORD && passwordRequired();
+}
+
+/** true als de wachtwoordpoort actief is (ook als hij dicht staat door een ontbrekend wachtwoord). */
 export function authEnabled(): boolean {
-  return !!process.env.APP_PASSWORD;
+  return !!process.env.APP_PASSWORD || passwordRequired();
 }
 
 async function hmacHex(key: string, message: string): Promise<string> {
@@ -79,14 +99,18 @@ function readCookie(req: Request, name: string): string | null {
 
 /** true als de request een geldige sessiecookie heeft (of de poort uit staat). */
 export async function isAuthed(req: Request): Promise<boolean> {
+  if (authMisconfigured()) return false;
   if (!authEnabled()) return true;
   const cookie = readCookie(req, SESSION_COOKIE);
   if (!cookie) return false;
   return timingSafeEqualStr(cookie, await sessionToken());
 }
 
-/** Geeft een 401-response terug als de request niet ingelogd is, anders null. */
+/** Geeft een 401/503-response terug als de request niet ingelogd is, anders null. */
 export async function requireAuth(req: Request): Promise<Response | null> {
+  if (authMisconfigured()) {
+    return Response.json({ error: MISSING_PASSWORD_ERROR }, { status: 503 });
+  }
   if (await isAuthed(req)) return null;
   return Response.json({ error: "Niet ingelogd" }, { status: 401 });
 }

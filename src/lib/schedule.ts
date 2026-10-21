@@ -43,8 +43,18 @@ const KEY = "scheduled-posts";
 const LOCK = "lock:scheduled-posts";
 
 export const MAX_ATTEMPTS = 3;
-/** Een 'processing'-post die langer dan dit vastzit, mag opnieuw opgepakt worden. */
+/**
+ * Een 'processing'-post die langer dan dit vastzit, is onderbroken (bv. een
+ * function-timeout). Hij wordt dan NIET blind opnieuw verstuurd, maar op
+ * 'onbekend, controleer het kanaal' gezet (zie markInterrupted).
+ */
 export const STALE_PROCESSING_MS = 10 * 60_000;
+
+/** Resultaat voor een plaatsing waarvan we niet weten of hij online staat. */
+export const INTERRUPTED_RESULT_ERROR =
+  "Onbekend: het plaatsen werd onderbroken (time-out). Controleer het kanaal voordat je opnieuw probeert — de post kan al online staan.";
+export const INTERRUPTED_ERROR =
+  "Plaatsen werd onderbroken (time-out). Controleer de kanalen met 'onbekend' voordat je 'Opnieuw proberen' kiest.";
 /** Wachttijd vóór poging 2 en 3. */
 const RETRY_DELAYS_MIN = [5, 15];
 /** Zoveel afgeronde posts bewaren we (nieuwste eerst). */
@@ -258,19 +268,62 @@ export async function duePosts(now: number): Promise<ScheduledPost[]> {
 }
 
 /**
+ * Een vastgelopen 'processing'-post afronden zonder opnieuw te versturen:
+ * tussentijds opgeslagen ok-resultaten blijven staan, de rest wordt
+ * 'onbekend' (ok:false). Daarna is hij 'partial' of 'failed' en kan de
+ * gebruiker na controle zelf 'Opnieuw proberen' kiezen.
+ */
+function markInterrupted(p: ScheduledPost, now: number): ScheduledPost {
+  const merged = new Map<string, PublishResult>();
+  for (const r of p.results || []) {
+    if (r.platform === "-") continue;
+    merged.set(resultKey(r), r);
+  }
+  for (const t of targetPairs(effectiveTargets(p))) {
+    const key = resultKey(t);
+    if (merged.get(key)?.ok) continue;
+    merged.set(key, {
+      platform: t.platform as PublishResult["platform"],
+      placement: t.placement,
+      ok: false,
+      error: INTERRUPTED_RESULT_ERROR,
+    });
+  }
+  const results = [...merged.values()];
+  return {
+    ...p,
+    results,
+    status: results.some((r) => r.ok) ? "partial" : "failed",
+    processingAt: undefined,
+    nextAttemptAt: undefined,
+    lastError: INTERRUPTED_ERROR,
+    updatedAt: now,
+  };
+}
+
+export type ClaimResult =
+  | { kind: "claimed"; post: ScheduledPost }
+  | { kind: "interrupted"; post: ScheduledPost };
+
+/**
  * Claimt een post atomisch (onder lock, na opnieuw lezen). Geeft de geclaimde
  * post terug, of null als hij al door een ander is opgepakt, nog niet aan de
- * beurt is, of intussen geannuleerd is.
+ * beurt is, of intussen geannuleerd is. Een vastgelopen 'processing'-post
+ * wordt niet geclaimd maar als onderbroken afgerond ('interrupted').
  */
 export async function claimPost(
   id: string,
   now: number,
-): Promise<ScheduledPost | null> {
-  return mutate((all) => {
+): Promise<ClaimResult | null> {
+  return mutate<ClaimResult | null>((all) => {
     const idx = all.findIndex((p) => p.id === id);
     if (idx < 0) return { save: false, result: null };
     const p = all[idx];
     if (!isDue(p, now)) return { save: false, result: null };
+    if (p.status === "processing") {
+      all[idx] = markInterrupted(p, now);
+      return { save: true, result: { kind: "interrupted", post: all[idx] } };
+    }
     all[idx] = {
       ...p,
       status: "processing",
@@ -278,7 +331,25 @@ export async function claimPost(
       attempts: (p.attempts ?? 0) + 1,
       updatedAt: now,
     };
-    return { save: true, result: all[idx] };
+    return { save: true, result: { kind: "claimed", post: all[idx] } };
+  });
+}
+
+/**
+ * Slaat een geslaagde plaatsing tussentijds op bij een post die nog
+ * 'processing' is. Breekt de function daarna af, dan weten we wat al online
+ * staat en wordt dat nooit opnieuw verstuurd.
+ */
+export async function recordResult(id: string, r: PublishResult): Promise<void> {
+  if (!r.ok) return;
+  await mutate((all) => {
+    const idx = all.findIndex((p) => p.id === id);
+    if (idx < 0 || all[idx].status !== "processing") return { save: false, result: null };
+    const p = all[idx];
+    const results = (p.results || []).filter((x) => resultKey(x) !== resultKey(r));
+    results.push(r);
+    all[idx] = { ...p, results };
+    return { save: true, result: null };
   });
 }
 
@@ -434,9 +505,12 @@ export async function finishPost(
 export async function processPost(
   id: string,
   now: number = Date.now(),
+  opts: { deadline?: number } = {},
 ): Promise<ScheduledPost | null> {
-  const post = await claimPost(id, now);
-  if (!post) return null;
+  const claim = await claimPost(id, now);
+  if (!claim) return null;
+  if (claim.kind === "interrupted") return claim.post;
+  const post = claim.post;
 
   const targets = remainingTargets(post);
   let out: { results?: PublishResult[]; error?: string };
@@ -451,6 +525,9 @@ export async function processPost(
         targets,
         captions: post.captions,
         dryRun: post.dryRun,
+        deadline: opts.deadline,
+        // Elke geslaagde plaatsing meteen opslaan (zie recordResult).
+        onResult: post.dryRun ? undefined : (r) => recordResult(id, r),
       });
     } catch (e) {
       out = {

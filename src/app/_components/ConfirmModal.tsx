@@ -109,8 +109,8 @@ export function ConfirmModal({
         </h2>
         {mode === "schedule" && state.scheduledFor && (
           <p className="mt-1 text-sm text-muted">
-            🗓️ {formatWhen(state.scheduledFor)} — wordt binnen ~5 minuten na dat tijdstip
-            geplaatst
+            🗓️ {formatWhen(state.scheduledFor)} — wordt meestal binnen ~5–15 minuten na dat
+            tijdstip geplaatst
           </p>
         )}
 

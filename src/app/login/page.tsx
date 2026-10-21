@@ -18,12 +18,21 @@ function safeNext(next: string | null): string {
   return next;
 }
 
+const CONFIG_ERROR =
+  "Inloggen is nog niet ingesteld: zet APP_PASSWORD in de Vercel-projectinstellingen en deploy opnieuw.";
+
 function LoginForm() {
   const params = useSearchParams();
   const next = safeNext(params.get("next"));
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(params.get("fout") ? "Onjuist wachtwoord" : "");
+  const [error, setError] = useState(
+    params.get("fout") === "config"
+      ? CONFIG_ERROR
+      : params.get("fout")
+        ? "Onjuist wachtwoord"
+        : "",
+  );
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -41,7 +50,13 @@ function LoginForm() {
         window.location.assign(safeNext(data?.next ?? next));
         return;
       }
-      setError(res.status === 401 ? "Onjuist wachtwoord" : "Er ging iets mis, probeer opnieuw");
+      setError(
+        res.status === 401
+          ? "Onjuist wachtwoord"
+          : res.status === 503
+            ? CONFIG_ERROR
+            : "Er ging iets mis, probeer opnieuw",
+      );
     } catch {
       setError("Geen verbinding, probeer opnieuw");
     }

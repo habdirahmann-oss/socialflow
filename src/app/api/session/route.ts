@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authEnabled, isAuthed } from "@/lib/auth";
+import { authEnabled, authMisconfigured, isAuthed } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,5 +9,6 @@ export async function GET(req: Request) {
   return NextResponse.json({
     authEnabled: authEnabled(),
     authed: await isAuthed(req),
+    misconfigured: authMisconfigured(),
   });
 }

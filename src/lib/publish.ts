@@ -104,6 +104,17 @@ export async function resolveMediaInput(
 /** Time-out voor de lees-only tokencontroles in testmodus. */
 const CHECK_TIMEOUT_MS = 5000;
 
+/**
+ * Standaard-tijdsbudget voor één publicatie-aanroep. Alle routes die publiceren
+ * hebben maxDuration 300 s; zo blijft er tijd over om resultaten op te slaan.
+ */
+export const DEFAULT_PUBLISH_BUDGET_MS = 265_000;
+/** Een plaatsing starten we alleen als er nog minstens zoveel tijd over is. */
+const MIN_PLACEMENT_MS = 60_000;
+/** Melding voor een plaatsing die bewust niet gestart is (veilig opnieuw te proberen). */
+export const NOT_STARTED_ERROR =
+  "Niet gestart: de tijdslimiet van deze run was bijna bereikt. Er is niets geplaatst; probeer opnieuw.";
+
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : "mislukt");
 
 /**
@@ -123,8 +134,17 @@ export async function publishForAccount(opts: {
   targets: PublishTargets;
   captions: PublishCaptions;
   dryRun?: boolean;
+  /**
+   * Uiterste tijdstip (epoch ms). Na `deadline - 60 s` start er geen nieuwe
+   * plaatsing meer en IG-video's krijgen alleen de resterende tijd.
+   * Standaard: nu + 265 s.
+   */
+  deadline?: number;
+  /** Wordt aangeroepen na elke echte plaatsing (om tussentijds op te slaan). */
+  onResult?: (r: PublishResult) => Promise<void> | void;
 }): Promise<PublishOutcome> {
-  const { accountId, mediaUrl, dryRun } = opts;
+  const { accountId, mediaUrl, dryRun, onResult } = opts;
+  const deadline = opts.deadline ?? Date.now() + DEFAULT_PUBLISH_BUDGET_MS;
   const captions: PublishCaptions = opts.captions || {};
   const kind: MediaKind | undefined = mediaUrl
     ? opts.mediaType === "image"
@@ -205,11 +225,22 @@ export async function publishForAccount(opts: {
       return out;
     }
     for (const p of placements) {
-      try {
-        const r = await post(p);
-        out.push({ platform, placement: p, ok: true, ...r });
-      } catch (e) {
-        fail(p, errMsg(e));
+      if (Date.now() > deadline - MIN_PLACEMENT_MS) {
+        fail(p, NOT_STARTED_ERROR);
+      } else {
+        try {
+          const r = await post(p);
+          out.push({ platform, placement: p, ok: true, ...r });
+        } catch (e) {
+          fail(p, errMsg(e));
+        }
+      }
+      if (onResult) {
+        try {
+          await onResult(out[out.length - 1]);
+        } catch {
+          // tussentijds opslaan is best effort
+        }
       }
     }
     return out;
@@ -304,8 +335,8 @@ export async function publishForAccount(opts: {
         const plc =
           placement === "story" ? "story" : media!.kind === "video" ? "reel" : "feed";
         const r = await igWithFallback(
-          () => postToInstagramDirect(igConn!, media!, caption, plc),
-          () => postToInstagram(igId!, page!.accessToken, media!, caption, plc),
+          () => postToInstagramDirect(igConn!, media!, caption, plc, deadline),
+          () => postToInstagram(igId!, page!.accessToken, media!, caption, plc, deadline),
         );
         return { id: r.id, url: r.permalink };
       },

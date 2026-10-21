@@ -299,6 +299,7 @@ export async function postToInstagramDirect(
   media: { url: string; kind: "image" | "video" },
   caption: string,
   placement: IgPlacement,
+  deadline?: number,
 ): Promise<{ id: string; permalink?: string }> {
   return publishIgMedia({
     base: "https://graph.instagram.com",
@@ -307,5 +308,6 @@ export async function postToInstagramDirect(
     media,
     caption,
     placement,
+    deadline,
   });
 }

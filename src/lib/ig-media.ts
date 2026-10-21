@@ -14,6 +14,11 @@ export type IgPlacement = "feed" | "reel" | "story";
 
 /** Totale wachttijd voor video-verwerking door Instagram. */
 const CONTAINER_BUDGET_MS = 150_000;
+/**
+ * Tijd die na het wachten op de container nog nodig kan zijn: publiceren
+ * (15 s), 10 s pauze + herkansing (15 s) en de permalink (10 s).
+ */
+const AFTER_CONTAINER_MS = 50_000;
 /** Poll-intervallen: 3, 5, 8, 8, 8 … s. */
 const POLL_INTERVALS_S = [3, 5, 8];
 
@@ -28,8 +33,10 @@ export async function publishIgMedia(opts: {
   media: IgMedia;
   caption: string;
   placement: IgPlacement;
+  /** Uiterste tijdstip (epoch ms) waarop alles klaar moet zijn (function-timeout). */
+  deadline?: number;
 }): Promise<{ id: string; permalink?: string }> {
-  const { base, igId, token, media, caption, placement } = opts;
+  const { base, igId, token, media, caption, placement, deadline } = opts;
   const isStory = placement === "story";
   const isVideo = media.kind === "video";
 
@@ -52,7 +59,12 @@ export async function publishIgMedia(opts: {
   if (!created.id) throw new Error("IG media-container: geen id ontvangen");
 
   // Video's worden asynchroon verwerkt → wachten tot de container klaar is.
-  if (isVideo) await waitForContainer(base, created.id, token);
+  if (isVideo) {
+    const budget = deadline
+      ? Math.min(CONTAINER_BUDGET_MS, deadline - Date.now() - AFTER_CONTAINER_MS)
+      : CONTAINER_BUDGET_MS;
+    await waitForContainer(base, created.id, token, budget);
+  }
 
   const publish = () =>
     fetchJson<{ id?: string }>(
@@ -69,6 +81,9 @@ export async function publishIgMedia(opts: {
   } catch (e) {
     // "media nog niet klaar" → 10 s wachten en één keer opnieuw.
     if (!notReady(e)) throw e;
+    if (deadline && Date.now() + 25_000 > deadline) {
+      throw new Error("IG publiceren: video nog niet klaar en geen tijd meer voor een herkansing");
+    }
     await sleep(10_000);
     published = await publish();
   }
@@ -89,13 +104,14 @@ export async function publishIgMedia(opts: {
   return { id: published.id, permalink };
 }
 
-/** Poll de container-status tot FINISHED, binnen een budget van 150 s. */
+/** Poll de container-status tot FINISHED, binnen een budget (max 150 s). */
 async function waitForContainer(
   base: string,
   containerId: string,
   token: string,
+  budgetMs: number,
 ): Promise<void> {
-  const deadline = Date.now() + CONTAINER_BUDGET_MS;
+  const deadline = Date.now() + Math.max(0, budgetMs);
   const qs = new URLSearchParams({ fields: "status_code,status", access_token: token });
   let last = "onbekend";
   for (let i = 0; ; i++) {
@@ -117,6 +133,6 @@ async function waitForContainer(
     }
   }
   throw new Error(
-    `IG-videoverwerking duurde te lang (>${CONTAINER_BUDGET_MS / 1000}s, laatste status: ${last})`,
+    `IG-videoverwerking duurde te lang (>${Math.round(Math.max(0, budgetMs) / 1000)}s, laatste status: ${last}). Er is niets geplaatst.`,
   );
 }

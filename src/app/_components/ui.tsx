@@ -1,4 +1,4 @@
-import LogoutLink from "@/components/LogoutLink";
+import AppNav from "@/components/AppNav";
 import { PLATFORMS, PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
 import type { PostView } from "@/lib/post-view";
 
@@ -105,7 +105,7 @@ export function Header({
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="SocialFlow" className="h-9 w-9 rounded-xl" />
@@ -114,27 +114,17 @@ export function Header({
             <p className="text-[11px] text-muted">één post · alle kanalen</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {PLATFORMS.map((p) => (
-            <PlatformBadge key={p.id} id={p.id} small />
-          ))}
-          <a
-            href="/planning"
-            className="ml-2 rounded-full border border-border px-3 py-1 text-xs text-muted transition hover:text-foreground"
-          >
-            🗓️ Planning
-          </a>
-          <a
-            href="/verbindingen"
-            className="rounded-full border border-border px-3 py-1 text-xs text-muted transition hover:text-foreground"
-          >
-            🔗 Verbindingen
-          </a>
-          <span className="hidden rounded-full border border-border px-3 py-1 text-xs text-muted sm:block">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="hidden items-center gap-2 sm:flex">
+            {PLATFORMS.map((p) => (
+              <PlatformBadge key={p.id} id={p.id} small />
+            ))}
+          </div>
+          <span className="hidden rounded-full border border-border px-3 py-1 text-xs text-muted lg:block">
             {accountName ? `${accountName} · ` : ""}
             {connected} gekoppeld
           </span>
-          <LogoutLink className="ml-1" />
+          <AppNav active="/" />
         </div>
       </div>
     </header>

@@ -10,11 +10,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const RUN_LOCK = "lock:cron";
-const RUN_LOCK_TTL_SEC = 280;
+/** Langer dan maxDuration, zodat er nooit twee runs tegelijk lopen. */
+const RUN_LOCK_TTL_SEC = 310;
 /** Max aantal posts per run (video's kunnen lang duren). */
 const MAX_POSTS_PER_RUN = 3;
-/** Na deze tijd pakken we geen nieuwe post meer op. */
-const PICK_WINDOW_MS = 200_000;
+/**
+ * Na deze tijd pakken we geen nieuwe post meer op: een video-post kan ~250 s
+ * duren. De rest volgt bij de volgende run (elke 5 min).
+ */
+const PICK_WINDOW_MS = 45_000;
+/** Uiterste tijdstip voor plaatsingen (maxDuration 300 s, rest = opslaan). */
+const PUBLISH_DEADLINE_MS = 270_000;
 /** Alleen nog de dagelijkse token-run starten als er zoveel tijd over is. */
 const HEALTH_WINDOW_MS = 240_000;
 
@@ -61,7 +67,9 @@ async function run(req: Request) {
       if (!next) break;
       tried.add(next.id);
       try {
-        const done = await processPost(next.id, now);
+        const done = await processPost(next.id, now, {
+          deadline: ranAt + PUBLISH_DEADLINE_MS,
+        });
         if (done) {
           processed.push({
             id: done.id,

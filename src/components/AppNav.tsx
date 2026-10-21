@@ -10,7 +10,7 @@ const ITEMS = [
 /** Hoofdnavigatie: Composer · Planning · Verbindingen · Uitloggen. */
 export default function AppNav({ active }: { active: "/" | "/planning" | "/verbindingen" }) {
   return (
-    <nav className="flex items-center gap-1.5">
+    <nav className="flex flex-wrap items-center gap-1.5">
       {ITEMS.map((it) => (
         <Link
           key={it.href}

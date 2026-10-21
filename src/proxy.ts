@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { authEnabled, isAuthed } from "@/lib/auth";
+import { authEnabled, authMisconfigured, isAuthed, MISSING_PASSWORD_ERROR } from "@/lib/auth";
 
 /**
- * Toegangspoort voor de hele app. Zonder APP_PASSWORD doet deze niets.
+ * Toegangspoort voor de hele app. Lokaal (`next dev`) zonder APP_PASSWORD doet
+ * deze niets; op Vercel/productie zonder APP_PASSWORD faalt hij dicht (503).
  * Let op: de API-routes controleren de sessie zelf óók (requireAuth).
  */
 
@@ -40,6 +41,9 @@ export async function proxy(request: NextRequest) {
 
   const { pathname, search } = request.nextUrl;
   if (isPublic(pathname)) return NextResponse.next();
+  if (authMisconfigured() && (pathname === "/api" || pathname.startsWith("/api/"))) {
+    return NextResponse.json({ error: MISSING_PASSWORD_ERROR }, { status: 503 });
+  }
   if (await isAuthed(request)) return NextResponse.next();
 
   if (pathname === "/api" || pathname.startsWith("/api/")) {
