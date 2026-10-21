@@ -869,7 +869,7 @@ export default function Page() {
                   </a>
                 </div>
               )}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[440px_1fr]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
           {/* LINKS: post maken */}
           <div className="flex flex-col gap-5">
             <Card title="Media">
@@ -1227,7 +1227,7 @@ export default function Page() {
                 </div>
 
                 {previewId && activeCaption ? (
-                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-[300px_1fr]">
+                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
                     <div className="flex flex-col items-center gap-3">
                       <PhonePreview
                         platform={previewId}
