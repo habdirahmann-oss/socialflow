@@ -5,45 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PLATFORM_MAP } from "@/lib/platforms";
 import LogoutLink from "@/components/LogoutLink";
-
-type HealthStatus = "ok" | "expiring" | "needs_reauth";
-
-interface ChannelHealth {
-  status: HealthStatus;
-  expiresAt?: number;
-  lastError?: string;
-  connectedAt?: number;
-}
-
-interface AccountHealth {
-  facebook?: ChannelHealth;
-  instagram?: ChannelHealth;
-  tiktok?: ChannelHealth;
-  youtube?: ChannelHealth;
-}
-
-interface AccountState {
-  id: string;
-  name: string;
-  facebook: boolean;
-  instagram: boolean;
-  pages: { id: string; name: string; instagram: string | null }[];
-  /** Pagina waarmee dit account nu post (null = nog kiezen). */
-  selectedPageId: string | null;
-  /** Nieuwe koppeling met meerdere pagina's zonder keuze: posten geblokkeerd. */
-  pageChoiceRequired?: boolean;
-  /** Oude koppeling die stil op de eerste pagina terugvalt. */
-  implicitPage?: boolean;
-  /** Via welke route Instagram publiceert. */
-  igPublishVia?: { username: string; route: "login" | "page" } | null;
-  /** Aantal wachtende geplande posts. */
-  pendingPosts?: number;
-  connectedAt: number | null;
-  igLogin: { username: string } | null;
-  tiktok: { displayName: string } | null;
-  youtube: { channelTitle: string } | null;
-  health?: AccountHealth;
-}
+import type { AccountInfo, AccountsResponse, ChannelHealth } from "@/lib/types";
 
 /** Vaste Nederlandse teksten voor bekende `reden`-waarden uit de callbacks. */
 const REDEN_NL: Record<string, string> = {
@@ -77,7 +39,7 @@ export default function VerbindingenPage() {
 
 function Inner() {
   const params = useSearchParams();
-  const [accounts, setAccounts] = useState<AccountState[]>([]);
+  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [configured, setConfigured] = useState(true);
   const [newName, setNewName] = useState("");
   const [igConfigured, setIgConfigured] = useState(true);
@@ -102,13 +64,13 @@ function Inner() {
     let ignore = false;
     fetch("/api/accounts")
       .then((res) => res.json())
-      .then((data) => {
+      .then((data: Partial<AccountsResponse> | null) => {
         if (ignore || !data || !Array.isArray(data.accounts)) return;
         setAccounts(data.accounts);
-        setConfigured(data.configured);
-        setIgConfigured(data.igConfigured);
-        setTtConfigured(data.tiktokConfigured);
-        setYtConfigured(data.youtubeConfigured);
+        setConfigured(Boolean(data.configured));
+        setIgConfigured(Boolean(data.igConfigured));
+        setTtConfigured(Boolean(data.tiktokConfigured));
+        setYtConfigured(Boolean(data.youtubeConfigured));
         setAppUrl(typeof data.appUrl === "string" ? data.appUrl : null);
         if (typeof data.maxAccounts === "number") setMaxAccounts(data.maxAccounts);
       })
@@ -168,7 +130,7 @@ function Inner() {
     load();
   };
 
-  const removeAccount = async (a: AccountState) => {
+  const removeAccount = async (a: AccountInfo) => {
     const n = a.pendingPosts || 0;
     const ok = window.confirm(
       `Account "${a.name}" verwijderen?\n\nAlle koppelingen van dit account worden ontkoppeld` +
@@ -190,7 +152,7 @@ function Inner() {
   };
 
   /** Ontkoppel één koppeling (type = meta | ig | tiktok | youtube), na bevestiging. */
-  const disconnectType = async (a: AccountState, type: string) => {
+  const disconnectType = async (a: AccountInfo, type: string) => {
     const n = a.pendingPosts || 0;
     const label = CONNECTION_LABEL[type] ?? type;
     const ok = window.confirm(
@@ -376,7 +338,7 @@ function AccountCard({
   onSelectPage,
   canRemove,
 }: {
-  account: AccountState;
+  account: AccountInfo;
   configured: boolean;
   igConfigured: boolean;
   ttConfigured: boolean;

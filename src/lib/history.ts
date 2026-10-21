@@ -1,3 +1,4 @@
+import type { MediaKind } from "./types";
 import { kvGet, kvSet, withLock } from "./store";
 import {
   publishForAccount,
@@ -62,10 +63,6 @@ async function mutate<T>(
 /** Alle entries, nieuwste eerst. */
 export async function listHistory(): Promise<HistoryEntry[]> {
   return readAll();
-}
-
-export async function getHistory(id: string): Promise<HistoryEntry | null> {
-  return (await readAll()).find((e) => e.id === id) ?? null;
 }
 
 /** Nieuwe entry vooraan; de lijst wordt afgekapt op MAX_HISTORY. */
@@ -207,7 +204,7 @@ export interface DirectPublishInput {
   accountName: string;
   subject: string;
   mediaUrl?: string;
-  mediaType?: "image" | "video";
+  mediaType?: MediaKind;
   /** Al genormaliseerd (alleen wat met deze media kan). */
   targets: PublishTargets;
   /** Zoals de client ze stuurde (voor publishForAccount). */

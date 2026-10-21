@@ -36,6 +36,7 @@ import { requireAuth } from "@/lib/auth";
 import { accountHealth } from "@/lib/token-health";
 import { cancelPendingForAccount, pendingCountByAccount } from "@/lib/schedule";
 import { APP_URL } from "@/lib/config";
+import type { AccountInfo, AccountsResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -51,7 +52,7 @@ export async function GET(req: Request) {
     () => ({}) as Record<string, number>,
   );
   const enriched = await Promise.all(
-    accounts.map(async (a) => {
+    accounts.map(async (a): Promise<AccountInfo> => {
       // eerst de health-check (ververst/controleert en slaat status op), dan lezen
       const health = await accountHealth(a.id);
       const [store, ig, tt, yt] = await Promise.all([
@@ -97,7 +98,7 @@ export async function GET(req: Request) {
       };
     }),
   );
-  return NextResponse.json({
+  return NextResponse.json<AccountsResponse>({
     configured: metaConfigured(),
     igConfigured: igConfigured(),
     tiktokConfigured: tiktokConfigured(),

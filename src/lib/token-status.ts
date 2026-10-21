@@ -1,4 +1,5 @@
 import { HttpError } from "./http";
+import type { ChannelHealth, HealthStatus } from "./types";
 
 /**
  * Gedeelde types + helpers voor token-gezondheid (T7).
@@ -17,15 +18,7 @@ export interface TokenHealthFields {
   checkedAt?: number;
 }
 
-export type HealthStatus = "ok" | "expiring" | "needs_reauth";
-
-/** Wat GET /api/accounts per kanaal teruggeeft — nooit tokens. */
-export interface ChannelHealth {
-  status: HealthStatus;
-  expiresAt?: number;
-  lastError?: string;
-  connectedAt?: number;
-}
+export type { HealthStatus, ChannelHealth };
 
 export const DAY_MS = 86_400_000;
 /** Minder dan dit nog over → 'expiring' (oranje). */
@@ -88,9 +81,4 @@ export function isTransientError(e: unknown): boolean {
 /** Meta/Instagram Graph-fout 190 = token ongeldig/verlopen. */
 export function isMetaTokenError(e: unknown): boolean {
   return e instanceof HttpError && e.code === 190;
-}
-
-/** Dagen tot `ts` (afgerond naar boven, min. 0). */
-export function daysUntil(ts: number, now = Date.now()): number {
-  return Math.max(0, Math.ceil((ts - now) / DAY_MS));
 }

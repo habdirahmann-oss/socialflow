@@ -6,6 +6,8 @@ import {
   type PublishResult,
 } from "./publish";
 import { normalizeTargets } from "./targets";
+import type { PlacementId } from "./platforms";
+import type { MediaKind } from "./types";
 
 export type ScheduledStatus =
   | "pending" // wacht op tijdstip (of op een volgende poging)
@@ -20,7 +22,7 @@ export interface ScheduledPost {
   accountName: string;
   scheduledFor: number; // epoch ms
   mediaUrl?: string; // al publiek (Blob)
-  mediaType?: "image" | "video";
+  mediaType?: MediaKind;
   thumb?: string; // kleine preview-url
   subject: string;
   targets: PublishTargets;
@@ -98,18 +100,6 @@ export async function addScheduled(
     const fresh = normalize({ ...post, updatedAt: post.updatedAt ?? Date.now() });
     all.push(fresh);
     return { save: true, result: { post: fresh, created: true } };
-  });
-}
-
-export async function updateScheduled(
-  id: string,
-  patch: Partial<ScheduledPost>,
-): Promise<ScheduledPost | null> {
-  return mutate((all) => {
-    const idx = all.findIndex((p) => p.id === id);
-    if (idx < 0) return { save: false, result: null };
-    all[idx] = { ...all[idx], ...patch, updatedAt: Date.now() };
-    return { save: true, result: all[idx] };
   });
 }
 
@@ -295,10 +285,12 @@ export async function claimPost(
 export const resultKey = (r: { platform: string; placement: string }) =>
   `${r.platform}:${r.placement}`;
 
-export function targetPairs(targets: PublishTargets): { platform: string; placement: string }[] {
-  const out: { platform: string; placement: string }[] = [];
+export function targetPairs(
+  targets: PublishTargets,
+): { platform: string; placement: PlacementId }[] {
+  const out: { platform: string; placement: PlacementId }[] = [];
   for (const [platform, placements] of Object.entries(targets || {})) {
-    for (const placement of (placements as string[] | undefined) || []) {
+    for (const placement of (placements as PlacementId[] | undefined) || []) {
       out.push({ platform, placement });
     }
   }

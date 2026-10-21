@@ -5,10 +5,17 @@ import {
   PLATFORMS,
   PLATFORM_MAP,
   TONES,
-  type PlatformId,
   type PlacementId,
+  type PlatformId,
 } from "@/lib/platforms";
-import type { CaptionResult, PlatformCaption } from "./api/captions/route";
+import type {
+  CaptionRequest,
+  CaptionResponse,
+  CaptionResult,
+  MediaKind,
+  PlacementsByPlatform,
+  PlatformCaption,
+} from "@/lib/types";
 import type { PostView } from "@/lib/post-view";
 import { channelBlockReason, countTargets, normalizeTargets } from "@/lib/targets";
 import { postJson } from "@/lib/client-fetch";
@@ -66,7 +73,7 @@ function fmtDuration(s: number): string {
 
 /** Wat er bij bevestigen verstuurd wordt (vastgelegd bij het openen van de modal). */
 interface PostPayload {
-  media: { url: string; type: "image" | "video" } | null;
+  media: { url: string; type: MediaKind } | null;
   captions: Partial<Record<PlatformId, PlatformCaption>>;
   subject: string;
 }
@@ -77,8 +84,12 @@ export default function Page() {
   const [media, setMedia] = useState<MediaItem | null>(null);
   const [subject, setSubject] = useState("");
   const [tone, setTone] = useState<string>(TONES[0]);
-  const [captions, setCaptions] = useState<CaptionResult>({});
+  const [captions, setCaptions] = useState<Partial<CaptionResult>>({});
+  /** Kanalen waarvan de gebruiker de tekst zelf heeft aangepast. */
+  const [edited, setEdited] = useState<Set<PlatformId>>(() => new Set());
   const [loading, setLoading] = useState(false);
+  /** Kanaal waarvoor nu los gegenereerd wordt. */
+  const [genFor, setGenFor] = useState<PlatformId | null>(null);
   const [source, setSource] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<"now" | "later">("now");
   const [scheduleAt, setScheduleAt] = useState("");
@@ -110,7 +121,7 @@ export default function Page() {
   const autoDroppedRef = useRef<Set<PlatformId>>(new Set());
   const accountsRef = useRef<AccountInfo[]>([]);
   const accountIdRef = useRef("");
-  const mediaKindRef = useRef<"image" | "video" | undefined>(undefined);
+  const mediaKindRef = useRef<MediaKind | undefined>(undefined);
 
   // Instagram: feed/reel is één keuze die automatisch meeschakelt (video → Reel,
   // foto → Feed); Story is optioneel. YouTube: Short óf Video.
@@ -268,7 +279,7 @@ export default function Page() {
    * Nieuwe media → kanalen die er niets mee kunnen gaan automatisch uit; kanalen
    * die eerder om die reden uitgingen gaan weer aan als het nu wel kan.
    */
-  const applyMediaKind = (kind: "image" | "video") => {
+  const applyMediaKind = (kind: MediaKind) => {
     mediaKindRef.current = kind;
     const acc = accountsRef.current.find((a) => a.id === accountIdRef.current);
     const next = new Set(selectedRef.current);
@@ -405,17 +416,17 @@ export default function Page() {
     activePreview && selected.has(activePreview) ? activePreview : selectedList[0]?.id;
 
   /** Ruwe plaatsingen uit de UI-keuzes. */
-  const rawTargets = (): Record<string, string[]> => {
-    const raw: Record<string, string[]> = {};
+  const rawTargets = (): PlacementsByPlatform => {
+    const raw: PlacementsByPlatform = {};
     const sel = selected;
     if (sel.has("facebook")) raw.facebook = ["feed"];
     if (sel.has("tiktok")) raw.tiktok = ["feed"];
     if (sel.has("youtube")) raw.youtube = [ytMode];
     if (sel.has("instagram")) {
-      raw.instagram = [
-        ...(igMain ? [mediaKind === "video" ? "reel" : "feed"] : []),
-        ...(igStory ? ["story"] : []),
-      ];
+      const ig: PlacementId[] = [];
+      if (igMain) ig.push(mediaKind === "video" ? "reel" : "feed");
+      if (igStory) ig.push("story");
+      raw.instagram = ig;
     }
     return raw;
   };
@@ -427,32 +438,55 @@ export default function Page() {
     mediaKind === "video" ? "Reel" : mediaKind === "image" ? "Feed" : "Feed / Reel";
 
   /* ---------------- AI captions ---------------- */
+  /** Vraagt captions aan voor `platforms`, met media-soort en plaatsingen (Reel/Short …). */
+  const requestCaptions = (platforms: PlatformId[]) => {
+    const raw = rawTargets();
+    const placements: PlacementsByPlatform = {};
+    for (const p of platforms) if (raw[p]) placements[p] = raw[p];
+    const body: CaptionRequest = {
+      subject,
+      tone,
+      platforms,
+      mediaType: mediaKind,
+      placements,
+      accountName: currentAccount?.name,
+    };
+    return postJson<CaptionResponse>("/api/captions", body);
+  };
+
+  const sourceToast = (src?: string) =>
+    showToast(
+      src === "claude"
+        ? "Captions gegenereerd met Claude ✨"
+        : "Captions gegenereerd (lokaal) — voeg een API-key toe voor slimmere teksten",
+    );
+
   const generate = async () => {
     if (selected.size === 0) {
       showToast("Kies eerst minstens één kanaal");
       return;
     }
+    const platforms = selectedList.map((p) => p.id);
+    if (
+      platforms.some((p) => edited.has(p)) &&
+      !window.confirm("Je bewerkte captions worden overschreven. Doorgaan?")
+    ) {
+      return;
+    }
     setLoading(true);
     setSource(null);
     try {
-      const data = await postJson<{
-        result?: CaptionResult;
-        source?: string;
-        error?: string;
-      }>("/api/captions", {
-        subject,
-        tone,
-        platforms: Array.from(selected),
-      });
+      const data = await requestCaptions(platforms);
       if (data.result) {
         const res = data.result;
         setCaptions((c) => ({ ...c, ...res }));
+        setEdited((e) => {
+          const next = new Set(e);
+          for (const p of Object.keys(res) as PlatformId[]) next.delete(p);
+          return next;
+        });
         setSource(data.source ?? null);
-        showToast(
-          data.source === "claude"
-            ? "Captions gegenereerd met Claude ✨"
-            : "Captions gegenereerd (lokaal) — voeg een API-key toe voor slimmere teksten",
-        );
+        sourceToast(data.source);
       } else {
         showToast(data.error || "Genereren mislukt");
       }
@@ -463,8 +497,39 @@ export default function Page() {
     }
   };
 
+  /** Alleen dit kanaal (bv. later aangezet) — de andere kanalen blijven onaangeroerd. */
+  const generateFor = async (pid: PlatformId) => {
+    if (genFor || loading) return;
+    setGenFor(pid);
+    try {
+      const data = await requestCaptions([pid]);
+      const c = data.result?.[pid];
+      if (c) {
+        setCaptions((prev) => ({ ...prev, [pid]: c }));
+        setEdited((e) => {
+          if (!e.has(pid)) return e;
+          const next = new Set(e);
+          next.delete(pid);
+          return next;
+        });
+        if (data.source) setSource(data.source);
+        showToast(`Caption voor ${PLATFORM_MAP[pid].name} gegenereerd`);
+      } else {
+        showToast(data.error || "Genereren mislukt");
+      }
+    } catch (e) {
+      showToast(errText(e, "Genereren mislukt"));
+    } finally {
+      setGenFor(null);
+    }
+  };
+
   const updateCaption = (pid: PlatformId, patch: Partial<PlatformCaption>) => {
-    setCaptions((c) => ({ ...c, [pid]: { ...c[pid], ...patch } }));
+    setCaptions((c) => {
+      const cur = c[pid];
+      return cur ? { ...c, [pid]: { ...cur, ...patch } } : c;
+    });
+    setEdited((e) => (e.has(pid) ? e : new Set(e).add(pid)));
   };
 
   /* ---------------- Publish-voorwaarden ---------------- */
@@ -682,6 +747,7 @@ export default function Page() {
   const newPost = () => {
     removeMedia();
     setCaptions({});
+    setEdited(new Set());
     setSubject("");
     setSource(null);
     setIgMain(true);
@@ -1108,7 +1174,7 @@ export default function Page() {
             {/* generate button */}
             <button
               onClick={generate}
-              disabled={loading || selected.size === 0}
+              disabled={loading || Boolean(genFor) || selected.size === 0}
               className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-brand to-brand-2 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-110 disabled:opacity-60"
             >
               {loading ? (
@@ -1117,7 +1183,7 @@ export default function Page() {
                 </span>
               ) : (
                 <span className="flex items-center justify-center gap-2">
-                  ✨ Genereer captions met AI
+                  {hasCaptions ? "🔄 Opnieuw genereren" : "✨ Genereer captions met AI"}
                 </span>
               )}
             </button>
@@ -1164,21 +1230,36 @@ export default function Page() {
                         platform={previewId}
                         media={media ?? undefined}
                         caption={activeCaption}
-                        placements={(built.targets[previewId] || []) as PlacementId[]}
+                        placements={built.targets[previewId] || []}
                         handle={previewName(currentAccount, previewId)}
                       />
                     </div>
                     <CaptionEditor
+                      key={previewId}
                       platform={previewId}
                       caption={activeCaption}
                       onChange={(patch) => updateCaption(previewId, patch)}
                     />
                   </div>
                 ) : previewId ? (
-                  <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted">
-                    Nog geen caption voor {PLATFORM_MAP[previewId].name} — klik op{" "}
-                    <span className="text-foreground">Genereer captions met AI</span>.
-                  </p>
+                  <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted">
+                    <p>Nog geen caption voor {PLATFORM_MAP[previewId].name}.</p>
+                    <button
+                      type="button"
+                      onClick={() => void generateFor(previewId)}
+                      disabled={Boolean(genFor) || loading}
+                      className="rounded-lg bg-gradient-to-r from-brand to-brand-2 px-4 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
+                    >
+                      {genFor === previewId ? (
+                        <span className="flex items-center gap-2">
+                          <Spinner /> Bezig…
+                        </span>
+                      ) : (
+                        "Genereer voor dit kanaal"
+                      )}
+                    </button>
+                    <p className="text-[11px]">De andere kanalen blijven zoals ze zijn.</p>
+                  </div>
                 ) : null}
               </>
             )}

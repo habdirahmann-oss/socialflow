@@ -4,16 +4,16 @@
  * Eén bron van waarheid voor "welke plaatsing kan met welke media": de server
  * gebruikt dit vóór het publiceren, de UI om te tonen wat overgeslagen wordt.
  */
-import type { PlatformCaption } from "@/app/api/captions/route";
-import type { PlatformId } from "./platforms";
+import type { PlacementId, PlatformId } from "./platforms";
+import type { MediaKind, PlatformCaption } from "./types";
 
-export type MediaKind = "image" | "video" | undefined;
+export type { MediaKind };
 
 export interface PublishTargets {
-  facebook?: string[];
-  instagram?: string[];
-  tiktok?: string[];
-  youtube?: string[];
+  facebook?: PlacementId[];
+  instagram?: PlacementId[];
+  tiktok?: PlacementId[];
+  youtube?: PlacementId[];
 }
 
 export interface DroppedTarget {
@@ -46,7 +46,7 @@ export function fullText(c?: PlatformCaption): string {
  */
 export function channelBlockReason(
   platform: PlatformId | string,
-  mediaKind: MediaKind,
+  mediaKind: MediaKind | undefined,
 ): string | null {
   switch (platform) {
     case "instagram":
@@ -83,7 +83,7 @@ function uniqStrings(v: unknown): string[] {
  */
 export function normalizeTargets(
   targets: unknown,
-  mediaKind: MediaKind,
+  mediaKind: MediaKind | undefined,
 ): { targets: PublishTargets; dropped: DroppedTarget[] } {
   const out: PublishTargets = {};
   const dropped: DroppedTarget[] = [];
@@ -99,8 +99,8 @@ export function normalizeTargets(
       for (const plc of list) drop(platform, plc, REASON.unknownPlatform);
       continue;
     }
-    const keep: string[] = [];
-    const add = (plc: string) => {
+    const keep: PlacementId[] = [];
+    const add = (plc: PlacementId) => {
       if (!keep.includes(plc)) keep.push(plc);
     };
 

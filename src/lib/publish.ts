@@ -27,7 +27,8 @@ import {
   type DroppedTarget,
   type PublishTargets,
 } from "./targets";
-import type { PlatformCaption } from "@/app/api/captions/route";
+import type { PlatformId } from "./platforms";
+import type { MediaKind, PlatformCaption } from "./types";
 
 export { fullText, normalizeTargets };
 export type { DroppedTarget, PublishTargets };
@@ -40,7 +41,8 @@ export interface PublishCaptions {
 }
 
 export interface PublishResult {
-  platform: string;
+  /** '-' = algemene fout van een poging (niet aan één kanaal gebonden). */
+  platform: PlatformId | "-";
   placement: string;
   ok: boolean;
   id?: string;
@@ -80,9 +82,9 @@ export interface MediaInput {
 export async function resolveMediaInput(
   media: MediaInput | null | undefined,
   dryRun: boolean,
-): Promise<{ url: string; type: "image" | "video" } | undefined> {
+): Promise<{ url: string; type: MediaKind } | undefined> {
   if (!media || typeof media !== "object") return undefined;
-  const type: "image" | "video" = media.type === "image" ? "image" : "video";
+  const type: MediaKind = media.type === "image" ? "image" : "video";
 
   if (media.url !== undefined && media.url !== null && media.url !== "") {
     if (!isAllowedMediaUrl(media.url)) throw new Error("Ongeldige media-URL");
@@ -117,14 +119,14 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : "mislukt");
 export async function publishForAccount(opts: {
   accountId: string;
   mediaUrl?: string;
-  mediaType?: "image" | "video";
+  mediaType?: MediaKind;
   targets: PublishTargets;
   captions: PublishCaptions;
   dryRun?: boolean;
 }): Promise<PublishOutcome> {
   const { accountId, mediaUrl, dryRun } = opts;
   const captions: PublishCaptions = opts.captions || {};
-  const kind: "image" | "video" | undefined = mediaUrl
+  const kind: MediaKind | undefined = mediaUrl
     ? opts.mediaType === "image"
       ? "image"
       : "video"

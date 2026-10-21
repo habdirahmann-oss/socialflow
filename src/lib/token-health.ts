@@ -4,16 +4,9 @@ import { checkIgTokenHealth, igHealth, loadIgConnection } from "./instagram";
 import { checkTikTokTokenHealth, loadTikTokConnection, tiktokHealth } from "./tiktok";
 import { checkYouTubeTokenHealth, loadYouTubeConnection, youtubeHealth } from "./youtube";
 import { kvSet, kvSetNX } from "./store";
-import type { ChannelHealth } from "./token-status";
+import type { AccountHealth, ChannelHealth } from "./types";
 
-export type { ChannelHealth };
-
-export interface AccountHealth {
-  facebook?: ChannelHealth;
-  instagram?: ChannelHealth;
-  tiktok?: ChannelHealth;
-  youtube?: ChannelHealth;
-}
+export type { AccountHealth, ChannelHealth };
 
 /**
  * Gezondheid per kanaal van één account (nooit tokens).

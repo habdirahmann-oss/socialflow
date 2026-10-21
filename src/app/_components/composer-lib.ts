@@ -3,13 +3,14 @@
  */
 import { PLATFORMS, PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
 import type { DroppedTarget, PublishTargets } from "@/lib/targets";
+import type { AccountInfo, MediaKind } from "@/lib/types";
 
 export interface MediaItem {
   /** blob:-URL voor de preview (nooit naar de server sturen) */
   previewUrl: string;
   /** publieke URL na een geslaagde upload (Blob of /api/media) */
   url: string | null;
-  type: "image" | "video";
+  type: MediaKind;
   mime: string;
   name: string;
   width?: number;
@@ -19,20 +20,6 @@ export interface MediaItem {
   /** 0–100 */
   progress: number;
   error: string | null;
-}
-
-export interface AccountInfo {
-  id: string;
-  name: string;
-  facebook: boolean;
-  instagram: boolean;
-  pages: { id: string; name: string; instagram: string | null }[];
-  selectedPageId?: string | null;
-  igLogin: { username: string } | null;
-  tiktok: { displayName: string } | null;
-  youtube: { channelTitle: string } | null;
-  /** Koppelingsgezondheid (T7). Vorm wordt tolerant gelezen; ontbreekt → niets tonen. */
-  health?: unknown;
 }
 
 /** Resultaat per plaatsing zoals /api/publish en /api/history/retry het teruggeven. */
@@ -55,7 +42,7 @@ export interface PublishResponse {
   historyId?: string;
 }
 
-export type { DroppedTarget, PublishTargets };
+export type { AccountInfo, DroppedTarget, PublishTargets };
 
 export const LS_ACCOUNT_KEY = "socialflow.accountId";
 
@@ -183,7 +170,8 @@ function toMs(v: unknown): number | null {
  * Geen (bruikbaar) health-veld → lege lijst.
  */
 export function healthWarnings(acc: AccountInfo | undefined, now: number): HealthWarning[] {
-  const h = acc?.health;
+  // Tolerant lezen: oudere/andere vormen mogen geen crash geven.
+  const h: unknown = acc?.health;
   if (!h || typeof h !== "object") return [];
   const entries: [string, unknown][] = Array.isArray(h)
     ? h.map((x) => [

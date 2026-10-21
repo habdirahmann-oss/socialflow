@@ -33,9 +33,21 @@ export async function kvGet<T>(key: string): Promise<T | null> {
   }
 }
 
-export async function kvSet<T>(key: string, value: T): Promise<void> {
+/**
+ * Slaat `value` op onder `key`. `opts.exSeconds` = optionele TTL (alleen Redis;
+ * lokaal in .data/ verloopt niets — prima voor ontwikkeling).
+ */
+export async function kvSet<T>(
+  key: string,
+  value: T,
+  opts?: { exSeconds?: number },
+): Promise<void> {
   if (redis) {
-    await redis.set(key, value);
+    if (opts?.exSeconds && opts.exSeconds > 0) {
+      await redis.set(key, value, { ex: Math.ceil(opts.exSeconds) });
+    } else {
+      await redis.set(key, value);
+    }
     return;
   }
   await fs.mkdir(DATA_DIR, { recursive: true });
