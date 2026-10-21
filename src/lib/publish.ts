@@ -139,6 +139,10 @@ const MIN_PLACEMENT_MS = 60_000;
 export const NOT_STARTED_ERROR =
   "Niet gestart: de tijdslimiet van deze run was bijna bereikt. Er is niets geplaatst; probeer opnieuw.";
 
+/** TikTok zonder Direct Post-audit: de post staat als concept in de TikTok-inbox. */
+const TIKTOK_DRAFT_NOTE =
+  "als concept in je TikTok-inbox gezet — open TikTok en tik op Plaatsen";
+
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : "mislukt");
 
 /**
@@ -409,10 +413,10 @@ export async function publishForAccount(opts: {
             fullText(captions.tiktok),
             captions.tiktok?.title,
           );
-          return { id: r.id, note: "fotopost" };
+          return { id: r.id, note: r.draft ? TIKTOK_DRAFT_NOTE : "fotopost" };
         }
         const r = await postToTikTok(ttConn!, media!.url, fullText(captions.tiktok));
-        return { id: r.id };
+        return { id: r.id, note: r.draft ? TIKTOK_DRAFT_NOTE : undefined };
       },
     ),
 

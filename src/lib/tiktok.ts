@@ -19,7 +19,7 @@ export const TIKTOK = {
 };
 
 export const TIKTOK_REDIRECT_URI = `${TIKTOK.appUrl}/api/auth/tiktok/callback`;
-export const TIKTOK_SCOPES = "user.info.basic,video.publish";
+export const TIKTOK_SCOPES = "user.info.basic,video.publish,video.upload";
 
 export function tiktokConfigured(): boolean {
   return Boolean(TIKTOK.clientKey && TIKTOK.clientSecret);
@@ -265,11 +265,19 @@ export async function tiktokPrivacyLevel(conn: TikTokConnection): Promise<string
   return options[0] ?? "SELF_ONLY";
 }
 
+/**
+ * Niet-geaudite apps mogen niet direct openbaar posten (alleen naar privé-accounts).
+ * Dan valt SocialFlow terug op 'Upload to TikTok': een concept in de inbox van de maker.
+ */
+function isUnaudited(e: unknown): boolean {
+  return e instanceof HttpError && e.code === "unaudited_client_can_only_post_to_private_accounts";
+}
+
 export async function postToTikTok(
   conn: TikTokConnection,
   videoUrl: string,
   caption: string,
-): Promise<{ id: string }> {
+): Promise<{ id: string; draft?: boolean }> {
   // 1. video ophalen (uit onze eigen opslag)
   const { buffer: video, contentType } = await downloadBuffer(videoUrl, {
     label: "Video ophalen",
@@ -282,30 +290,41 @@ export async function postToTikTok(
   //    Openbaar als TikTok dat toestaat (app goedgekeurd), anders de eerste optie.
   const privacy = await tiktokPrivacyLevel(conn);
 
-  // 3. upload initialiseren
-  const init = await fetchJson<{ data?: { upload_url?: string; publish_id?: string } }>(
-    "https://open.tiktokapis.com/v2/post/publish/video/init/",
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${conn.accessToken}`,
-        "content-type": "application/json; charset=UTF-8",
+  // 3. upload initialiseren (zonder Direct Post-audit: als concept naar de inbox)
+  const sourceInfo = {
+    source: "FILE_UPLOAD",
+    video_size: size,
+    chunk_size: chunkSize,
+    total_chunk_count: total,
+  };
+  const headers = {
+    authorization: `Bearer ${conn.accessToken}`,
+    "content-type": "application/json; charset=UTF-8",
+  };
+  let draft = false;
+  let init: { data?: { upload_url?: string; publish_id?: string } };
+  try {
+    init = await fetchJson(
+      "https://open.tiktokapis.com/v2/post/publish/video/init/",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          post_info: { title: caption.slice(0, 2200), privacy_level: privacy },
+          source_info: sourceInfo,
+        }),
       },
-      body: JSON.stringify({
-        post_info: {
-          title: caption.slice(0, 2200),
-          privacy_level: privacy,
-        },
-        source_info: {
-          source: "FILE_UPLOAD",
-          video_size: size,
-          chunk_size: chunkSize,
-          total_chunk_count: total,
-        },
-      }),
-    },
-    { label: "TikTok upload-init" },
-  );
+      { label: "TikTok upload-init" },
+    );
+  } catch (e) {
+    if (!isUnaudited(e)) throw e;
+    draft = true;
+    init = await fetchJson(
+      "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/",
+      { method: "POST", headers, body: JSON.stringify({ source_info: sourceInfo }) },
+      { label: "TikTok concept-init" },
+    );
+  }
   const uploadUrl = init.data?.upload_url;
   const publishId = init.data?.publish_id;
   if (!uploadUrl || !publishId) throw new Error("TikTok upload-init: geen upload-URL ontvangen");
@@ -331,7 +350,7 @@ export async function postToTikTok(
     );
   }
 
-  return { id: publishId };
+  return { id: publishId, draft };
 }
 
 /* ---------------- Foto('s) posten (PULL_FROM_URL) ---------------- */
@@ -349,38 +368,48 @@ export async function postPhotosToTikTok(
   imageUrls: string[],
   caption: string,
   title?: string,
-): Promise<{ id: string }> {
+): Promise<{ id: string; draft?: boolean }> {
   if (!imageUrls.length || imageUrls.length > TIKTOK_PHOTO_MAX) {
     throw new Error(`TikTok-fotopost: 1 t/m ${TIKTOK_PHOTO_MAX} foto's nodig`);
   }
-  const privacy = await tiktokPrivacyLevel(conn);
-  const init = await fetchJson<{ data?: { publish_id?: string } }>(
-    "https://open.tiktokapis.com/v2/post/publish/content/init/",
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${conn.accessToken}`,
-        "content-type": "application/json; charset=UTF-8",
+  const init = (direct: boolean, privacy?: string) =>
+    fetchJson<{ data?: { publish_id?: string } }>(
+      "https://open.tiktokapis.com/v2/post/publish/content/init/",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${conn.accessToken}`,
+          "content-type": "application/json; charset=UTF-8",
+        },
+        body: JSON.stringify({
+          post_info: {
+            title: (title || caption.split("\n")[0] || "").slice(0, 90),
+            description: caption.slice(0, 4000),
+            ...(direct ? { privacy_level: privacy } : {}),
+            auto_add_music: true,
+          },
+          source_info: {
+            source: "PULL_FROM_URL",
+            photo_cover_index: 0,
+            photo_images: imageUrls,
+          },
+          post_mode: direct ? "DIRECT_POST" : "MEDIA_UPLOAD",
+          media_type: "PHOTO",
+        }),
       },
-      body: JSON.stringify({
-        post_info: {
-          title: (title || caption.split("\n")[0] || "").slice(0, 90),
-          description: caption.slice(0, 4000),
-          privacy_level: privacy,
-          auto_add_music: true,
-        },
-        source_info: {
-          source: "PULL_FROM_URL",
-          photo_cover_index: 0,
-          photo_images: imageUrls,
-        },
-        post_mode: "DIRECT_POST",
-        media_type: "PHOTO",
-      }),
-    },
-    { label: "TikTok fotopost-init" },
-  );
-  const publishId = init.data?.publish_id;
+      { label: direct ? "TikTok fotopost-init" : "TikTok concept-init" },
+    );
+  let draft = false;
+  let res: { data?: { publish_id?: string } };
+  try {
+    res = await init(true, await tiktokPrivacyLevel(conn));
+  } catch (e) {
+    if (!isUnaudited(e)) throw e;
+    // Zonder Direct Post-audit: als concept naar de TikTok-inbox van de maker.
+    draft = true;
+    res = await init(false);
+  }
+  const publishId = res.data?.publish_id;
   if (!publishId) throw new Error("TikTok fotopost-init: geen publish-id ontvangen");
 
   // Ophalen + verwerken gebeurt asynchroon; een mislukking (bv. URL niet
@@ -401,10 +430,10 @@ export async function postPhotosToTikTok(
       { label: "TikTok fotopost-status", timeoutMs: 10_000 },
     ).catch(() => null);
     const status = st?.data?.status;
-    if (status === "PUBLISH_COMPLETE") break;
+    if (status === "PUBLISH_COMPLETE" || (draft && status === "SEND_TO_USER_INBOX")) break;
     if (status === "FAILED") {
       throw new Error(`TikTok-fotopost mislukt: ${st?.data?.fail_reason || "onbekende reden"}`);
     }
   }
-  return { id: publishId };
+  return { id: publishId, draft };
 }
