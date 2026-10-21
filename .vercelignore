@@ -1,0 +1,7 @@
+# Nooit meesturen naar Vercel: lokale secrets en token-opslag
+.env*
+!.env.local.example
+.data
+.claude
+.DS_Store
+tsconfig.tsbuildinfo
