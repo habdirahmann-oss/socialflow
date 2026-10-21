@@ -601,7 +601,7 @@ function AccountCard({
             <div>
               <p className="text-sm font-semibold">TikTok</p>
               <p className="text-[11px] text-muted">
-                Video&apos;s posten (testmodus: privé tot audit)
+                Video&apos;s posten (openbaar)
               </p>
             </div>
             <span className="ml-auto">

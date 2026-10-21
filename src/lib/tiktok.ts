@@ -244,6 +244,27 @@ export function tiktokChunkPlan(size: number): { chunkSize: number; total: numbe
   return { chunkSize, total };
 }
 
+/**
+ * Vraagt de zichtbaarheidsopties van de maker op. Kiest openbaar als dat mag;
+ * een niet-goedgekeurde app krijgt alleen SELF_ONLY terug en post dan privé.
+ */
+export async function tiktokPrivacyLevel(conn: TikTokConnection): Promise<string> {
+  const info = await fetchJson<{ data?: { privacy_level_options?: string[] } }>(
+    "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${conn.accessToken}`,
+        "content-type": "application/json; charset=UTF-8",
+      },
+    },
+    { label: "TikTok creator-info" },
+  );
+  const options = info.data?.privacy_level_options ?? [];
+  if (options.includes("PUBLIC_TO_EVERYONE")) return "PUBLIC_TO_EVERYONE";
+  return options[0] ?? "SELF_ONLY";
+}
+
 export async function postToTikTok(
   conn: TikTokConnection,
   videoUrl: string,
@@ -257,7 +278,11 @@ export async function postToTikTok(
   if (!size) throw new Error("Video ophalen: leeg bestand");
   const { chunkSize, total } = tiktokChunkPlan(size);
 
-  // 2. upload initialiseren
+  // 2. toegestane zichtbaarheid opvragen (verplicht vóór Direct Post).
+  //    Openbaar als TikTok dat toestaat (app goedgekeurd), anders de eerste optie.
+  const privacy = await tiktokPrivacyLevel(conn);
+
+  // 3. upload initialiseren
   const init = await fetchJson<{ data?: { upload_url?: string; publish_id?: string } }>(
     "https://open.tiktokapis.com/v2/post/publish/video/init/",
     {
@@ -269,7 +294,7 @@ export async function postToTikTok(
       body: JSON.stringify({
         post_info: {
           title: caption.slice(0, 2200),
-          privacy_level: "SELF_ONLY", // sandbox: alleen privé; na audit PUBLIC_TO_EVERYONE
+          privacy_level: privacy,
         },
         source_info: {
           source: "FILE_UPLOAD",
@@ -285,7 +310,7 @@ export async function postToTikTok(
   const publishId = init.data?.publish_id;
   if (!uploadUrl || !publishId) throw new Error("TikTok upload-init: geen upload-URL ontvangen");
 
-  // 3. video uploaden, chunk voor chunk
+  // 4. video uploaden, chunk voor chunk
   for (let i = 0; i < total; i++) {
     const start = i * chunkSize;
     const end = i === total - 1 ? size - 1 : start + chunkSize - 1;
