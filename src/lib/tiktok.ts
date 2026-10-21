@@ -39,6 +39,9 @@ export function tiktokLoginUrl(state: string): string {
     response_type: "code",
     redirect_uri: TIKTOK_REDIRECT_URI,
     state,
+    // Altijd het toestemmingsscherm tonen (ook bij opnieuw koppelen), zodat je
+    // ziet welk account en welke rechten je koppelt.
+    disable_auto_auth: "1",
   });
   return `https://www.tiktok.com/v2/auth/authorize/?${params}`;
 }
