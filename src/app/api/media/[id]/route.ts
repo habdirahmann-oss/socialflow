@@ -3,8 +3,14 @@ import { readMedia, useBlob } from "@/lib/media";
 
 export const runtime = "nodejs";
 
-/** Alleen foto's uit onze eigen Blob-store (media/<uuid>.jpg|png) worden doorgegeven. */
-const BLOB_ID_RE = /^[a-f0-9-]{36}\.(jpg|png)$/;
+/** Alleen media uit onze eigen Blob-store (media/<uuid>.<ext>) wordt doorgegeven. */
+const BLOB_ID_RE = /^[a-f0-9-]{36}\.(jpg|png|mp4|mov)$/;
+const MIME: Record<string, string> = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+};
 
 export async function GET(
   _req: Request,
@@ -28,7 +34,10 @@ export async function GET(
       if (res.ok && res.body) {
         return new Response(res.body, {
           headers: {
-            "content-type": meta.contentType || (id.endsWith(".png") ? "image/png" : "image/jpeg"),
+            "content-type": meta.contentType || MIME[id.split(".").pop() || ""] || "application/octet-stream",
+            ...(res.headers.get("content-length")
+              ? { "content-length": res.headers.get("content-length")! }
+              : {}),
             "cache-control": "public, max-age=86400",
           },
         });

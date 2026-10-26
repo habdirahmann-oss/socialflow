@@ -43,6 +43,7 @@ function Inner() {
   const [newName, setNewName] = useState("");
   const [igConfigured, setIgConfigured] = useState(true);
   const [ttConfigured, setTtConfigured] = useState(false);
+  const [ttbConfigured, setTtbConfigured] = useState(false);
   const [ytConfigured, setYtConfigured] = useState(false);
   const [appUrl, setAppUrl] = useState<string | null>(null);
   const [maxAccounts, setMaxAccounts] = useState(10);
@@ -53,6 +54,7 @@ function Inner() {
   const metaResult = params.get("meta");
   const igResult = params.get("ig");
   const ttResult = params.get("tt");
+  const ttbResult = params.get("ttb");
   const ytResult = params.get("yt");
   const reden = redenText(params.get("reden"));
   const activeAccount = params.get("account");
@@ -69,6 +71,7 @@ function Inner() {
         setConfigured(Boolean(data.configured));
         setIgConfigured(Boolean(data.igConfigured));
         setTtConfigured(Boolean(data.tiktokConfigured));
+        setTtbConfigured(Boolean(data.ttbConfigured));
         setYtConfigured(Boolean(data.youtubeConfigured));
         setAppUrl(typeof data.appUrl === "string" ? data.appUrl : null);
         if (typeof data.maxAccounts === "number") setMaxAccounts(data.maxAccounts);
@@ -147,6 +150,7 @@ function Inner() {
     meta: "Facebook + Instagram (Meta)",
     ig: "Instagram (losse login)",
     tiktok: "TikTok",
+    ttbiz: "TikTok Business (direct posten)",
     youtube: "YouTube",
   };
 
@@ -226,6 +230,16 @@ function Inner() {
             ✕ TikTok-koppeling mislukt{reden ? `: ${reden}` : ""}.
           </div>
         )}
+        {ttbResult === "ok" && (
+          <div className="mt-5 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
+            ✓ TikTok Business gekoppeld: TikTok-posts gaan nu direct openbaar.
+          </div>
+        )}
+        {ttbResult === "error" && (
+          <div className="mt-5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-600">
+            ✕ TikTok Business-koppeling mislukt{reden ? `: ${reden}` : ""}.
+          </div>
+        )}
         {ytResult === "ok" && (
           <div className="mt-5 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
             ✓ YouTube gekoppeld!
@@ -276,6 +290,7 @@ function Inner() {
               configured={configured}
               igConfigured={igConfigured}
               ttConfigured={ttConfigured}
+              ttbConfigured={ttbConfigured}
               ytConfigured={ytConfigured}
               redirectUri={`${appUrl ?? (typeof window !== "undefined" ? window.location.origin : "")}/api/auth/meta/callback`}
               highlight={a.id === activeAccount || a.id === newId}
@@ -299,6 +314,7 @@ function AccountCard({
   configured,
   igConfigured,
   ttConfigured,
+  ttbConfigured,
   ytConfigured,
   redirectUri,
   highlight,
@@ -313,6 +329,7 @@ function AccountCard({
   configured: boolean;
   igConfigured: boolean;
   ttConfigured: boolean;
+  ttbConfigured: boolean;
   ytConfigured: boolean;
   redirectUri: string;
   highlight: boolean;
@@ -590,7 +607,7 @@ function AccountCard({
               </p>
             </div>
             <span className="ml-auto">
-              <StatusPill ok={Boolean(account.tiktok)} label="TT" />
+              <StatusPill ok={Boolean(account.tiktok || account.tiktokBusiness)} label="TT" />
             </span>
           </div>
           {account.tiktok && (
@@ -620,6 +637,46 @@ function AccountCard({
                 Ontkoppelen
               </button>
             )}
+          </div>
+
+          {/* Direct openbaar posten via de TikTok API for Business */}
+          <div className="mt-4 border-t border-border pt-3">
+            <p className="text-xs font-medium">
+              Direct openbaar posten{" "}
+              <span className="font-normal text-muted">(TikTok Business-account)</span>
+            </p>
+            {account.tiktokBusiness ? (
+              <p className="mt-1 text-xs text-accent">
+                ✓ Actief via <strong>{account.tiktokBusiness.displayName}</strong>: TikTok-posts
+                gaan direct live.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-muted">
+                Zonder deze koppeling komen TikTok-posts als concept in je TikTok-inbox.
+              </p>
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              {ttbConfigured ? (
+                <a
+                  href={`/api/auth/ttbiz/login?account=${account.id}`}
+                  className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground shadow-sm transition hover:bg-surface-2"
+                >
+                  {account.tiktokBusiness ? "Opnieuw koppelen" : "Koppel voor direct posten"}
+                </a>
+              ) : (
+                <span className="text-[11px] text-muted">
+                  Nog niet beschikbaar: wacht op goedkeuring van TikTok for Business.
+                </span>
+              )}
+              {account.tiktokBusiness && (
+                <button
+                  onClick={() => onDisconnectType("ttbiz")}
+                  className="text-xs text-muted transition hover:text-red-600"
+                >
+                  Ontkoppelen
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

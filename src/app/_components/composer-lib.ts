@@ -69,7 +69,7 @@ export function isConnected(acc: AccountInfo | undefined, pid: PlatformId): bool
     case "instagram":
       return Boolean(acc.instagram || acc.igLogin);
     case "tiktok":
-      return Boolean(acc.tiktok);
+      return Boolean(acc.tiktok || acc.tiktokBusiness);
     case "youtube":
       return Boolean(acc.youtube);
   }
@@ -90,7 +90,7 @@ export function channelHandle(acc: AccountInfo | undefined, pid: PlatformId): st
       return u ? `@${u.replace(/^@/, "")}` : null;
     }
     case "tiktok":
-      return acc.tiktok?.displayName || null;
+      return acc.tiktokBusiness?.displayName || acc.tiktok?.displayName || null;
     case "youtube":
       return acc.youtube?.channelTitle || null;
   }

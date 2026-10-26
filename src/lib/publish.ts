@@ -22,6 +22,7 @@ import {
   postCarouselToInstagramDirect,
 } from "./instagram";
 import { expiredMessage, errorText, isMetaTokenError } from "./token-status";
+import { loadTtbConnection, ttbPublishPhotos, ttbPublishVideo } from "./tiktok-business";
 import {
   loadTikTokConnection,
   postToTikTok,
@@ -192,17 +193,20 @@ export async function publishForAccount(opts: {
 
   // load*Connection verversen TikTok/YouTube (en IG) zelf vóór het posten;
   // mislukt dat definitief, dan staat status op 'needs_reauth'.
-  const [store, igConn, ttConn, ytConn] = await Promise.all([
+  const [store, igConn, ttConn, ttbConn, ytConn] = await Promise.all([
     loadMetaStore(accountId),
     loadIgConnection(accountId),
     loadTikTokConnection(accountId),
+    loadTtbConnection(accountId),
     loadYouTubeConnection(accountId),
   ]);
+  /** TikTok Business-koppeling (direct openbaar) gaat voor de gewone koppeling. */
+  const ttbUsable = Boolean(ttbConn && ttbConn.status !== "needs_reauth");
   const page = activePage(store);
   /** Nieuwe Meta-koppeling met meerdere pagina's en nog geen keuze. */
   const pageChoice = needsPageChoice(store);
 
-  if (!page && !igConn && !ttConn && !ytConn) {
+  if (!page && !igConn && !ttConn && !ttbConn && !ytConn) {
     return {
       ok: false,
       allOk: false,
@@ -400,18 +404,37 @@ export async function publishForAccount(opts: {
       "tiktok",
       targets.tiktok,
       () => {
-        if (!ttConn) return "Geen TikTok-account gekoppeld";
-        if (ttConn.status === "needs_reauth") return expiredMessage("TikTok");
+        if (!ttbUsable) {
+          if (!ttConn) return ttbConn ? expiredMessage("TikTok") : "Geen TikTok-account gekoppeld";
+          if (ttConn.status === "needs_reauth") return expiredMessage("TikTok");
+        }
         if (!media) return "TikTok heeft een video of foto nodig";
         return null;
       },
       async () => {
+        if (ttbUsable) return; // token is net ververst door loadTtbConnection
         await tiktokUserInfo(ttConn!.accessToken, {
           label: "TikTok-koppeling",
           timeoutMs: CHECK_TIMEOUT_MS,
         });
       },
       async () => {
+        if (ttbUsable) {
+          // TikTok Business API: direct openbaar op het account
+          const caption = fullText(captions.tiktok);
+          const settings = captions.tiktok?.tiktok;
+          const r =
+            media!.kind === "image"
+              ? await ttbPublishPhotos(
+                  ttbConn!,
+                  images.map(appMediaUrl),
+                  caption,
+                  captions.tiktok?.title,
+                  settings,
+                )
+              : await ttbPublishVideo(ttbConn!, appMediaUrl(media!.url), caption, settings);
+          return { id: r.id };
+        }
         if (media!.kind === "image") {
           // Fotopost: TikTok haalt de foto's op via ons geverifieerde domein.
           const r = await postPhotosToTikTok(

@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { clearMetaStore, setSelectedPage } from "@/lib/meta";
 import { clearIgConnection } from "@/lib/instagram";
 import { clearTikTokConnection } from "@/lib/tiktok";
+import { clearTtbConnection } from "@/lib/tiktok-business";
 import { clearYouTubeConnection } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-/** Ontkoppel een koppeling van één account. type=meta | ig | tiktok | youtube. */
+/** Ontkoppel een koppeling van één account. type=meta | ig | tiktok | ttbiz | youtube. */
 export async function DELETE(req: Request) {
   const denied = await requireAuth(req);
   if (denied) return denied;
@@ -19,6 +20,7 @@ export async function DELETE(req: Request) {
   }
   if (type === "ig") await clearIgConnection(accountId);
   else if (type === "tiktok") await clearTikTokConnection(accountId);
+  else if (type === "ttbiz") await clearTtbConnection(accountId);
   else if (type === "youtube") await clearYouTubeConnection(accountId);
   else await clearMetaStore(accountId);
   return NextResponse.json({ ok: true });

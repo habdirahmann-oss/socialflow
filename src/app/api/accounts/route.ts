@@ -27,6 +27,7 @@ import {
   clearTikTokConnection,
   tiktokConfigured,
 } from "@/lib/tiktok";
+import { clearTtbConnection, loadTtbConnection, ttbConfigured } from "@/lib/tiktok-business";
 import {
   loadYouTubeConnection,
   clearYouTubeConnection,
@@ -55,10 +56,11 @@ export async function GET(req: Request) {
     accounts.map(async (a): Promise<AccountInfo> => {
       // eerst de health-check (ververst/controleert en slaat status op), dan lezen
       const health = await accountHealth(a.id);
-      const [store, ig, tt, yt] = await Promise.all([
+      const [store, ig, tt, ttb, yt] = await Promise.all([
         loadMetaStore(a.id),
         loadIgConnection(a.id),
         loadTikTokConnection(a.id),
+        loadTtbConnection(a.id),
         loadYouTubeConnection(a.id),
       ]);
       const pages = (store?.pages || []).map((p) => ({
@@ -93,6 +95,7 @@ export async function GET(req: Request) {
         connectedAt: store?.obtainedAt || null,
         igLogin: ig ? { username: ig.username } : null,
         tiktok: tt ? { displayName: tt.displayName } : null,
+        tiktokBusiness: ttb ? { displayName: ttb.displayName } : null,
         youtube: yt ? { channelTitle: yt.channelTitle } : null,
         health,
       };
@@ -102,6 +105,7 @@ export async function GET(req: Request) {
     configured: metaConfigured(),
     igConfigured: igConfigured(),
     tiktokConfigured: tiktokConfigured(),
+    ttbConfigured: ttbConfigured(),
     youtubeConfigured: youtubeConfigured(),
     appUrl: APP_URL,
     maxAccounts: MAX_ACCOUNTS,
@@ -146,6 +150,7 @@ export async function DELETE(req: Request) {
   await clearMetaStore(id); // tokens opruimen
   await clearIgConnection(id);
   await clearTikTokConnection(id);
+  await clearTtbConnection(id);
   await clearYouTubeConnection(id);
   await deleteAccount(id);
   return NextResponse.json({ ok: true, cancelledPosts: cancelled.length });

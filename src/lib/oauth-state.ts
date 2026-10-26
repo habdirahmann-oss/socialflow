@@ -18,13 +18,14 @@ import { APP_URL } from "./config";
  * CRON_SECRET (zodat het met de huidige env-variabelen al werkt).
  */
 
-export type OAuthProvider = "meta" | "instagram" | "tiktok" | "youtube";
+export type OAuthProvider = "meta" | "instagram" | "tiktok" | "ttbiz" | "youtube";
 
 /** Querystring-sleutel waarmee /verbindingen het resultaat per platform leest. */
 export const RESULT_PARAM: Record<OAuthProvider, string> = {
   meta: "meta",
   instagram: "ig",
   tiktok: "tt",
+  ttbiz: "ttb",
   youtube: "yt",
 };
 

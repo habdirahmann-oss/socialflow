@@ -23,7 +23,7 @@ function isPublic(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;
   if (pathname.startsWith("/_next/")) return true;
   // OAuth-callbacks komen terug van Meta/Google/TikTok
-  if (/^\/api\/auth\/[^/]+\/callback$/.test(pathname)) return true;
+  if (/^\/api\/auth\/[^/]+\/callback\/?$/.test(pathname)) return true;
   // Cron heeft z'n eigen CRON_SECRET-check
   if (pathname.startsWith("/api/cron/")) return true;
   // Media moet publiek bereikbaar zijn voor Instagram/TikTok

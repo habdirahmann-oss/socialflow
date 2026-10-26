@@ -92,6 +92,8 @@ export interface AccountInfo {
   connectedAt: number | null;
   igLogin: { username: string } | null;
   tiktok: { displayName: string } | null;
+  /** TikTok via de Business API: direct openbaar posten. */
+  tiktokBusiness: { displayName: string } | null;
   youtube: { channelTitle: string } | null;
   health?: AccountHealth;
 }
@@ -101,6 +103,8 @@ export interface AccountsResponse {
   configured: boolean;
   igConfigured: boolean;
   tiktokConfigured: boolean;
+  /** TikTok API for Business-app ingesteld (TTB_*). */
+  ttbConfigured: boolean;
   youtubeConfigured: boolean;
   appUrl: string;
   maxAccounts: number;
