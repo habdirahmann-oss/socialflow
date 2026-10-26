@@ -8,6 +8,17 @@ import PlatformBadge from "@/components/PlatformBadge";
 import { PLATFORM_MAP, type PlatformId } from "@/lib/platforms";
 import { postJson } from "@/lib/client-fetch";
 import type { PostView } from "@/lib/post-view";
+import Calendar from "./Calendar";
+
+/** Concept zoals /api/drafts het teruggeeft (alleen wat de lijst toont). */
+interface DraftLite {
+  id: string;
+  accountId: string;
+  subject: string;
+  media: { url: string; type: "image" | "video" }[];
+  channels: string[];
+  updatedAt: number;
+}
 
 /* ---------------- Types & helpers ---------------- */
 
@@ -154,6 +165,8 @@ function Planning() {
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null);
+  const [drafts, setDrafts] = useState<DraftLite[]>([]);
+  const [view, setView] = useState<"lijst" | "kalender">("lijst");
 
   const reload = () => setReloadKey((k) => k + 1);
 
@@ -198,6 +211,11 @@ function Planning() {
         setLoadError(errMsg(e, "Laden mislukt"));
         setLoaded(true);
       });
+    postJson<{ drafts?: DraftLite[] }>(`/api/drafts${q}`, undefined, "GET")
+      .then((d) => {
+        if (!cancelled) setDrafts(d.drafts || []);
+      })
+      .catch(() => {});
     postJson<{ lastRun?: CronRun | null }>("/api/cron-status", undefined, "GET")
       .then((d) => {
         if (cancelled) return;
@@ -414,14 +432,101 @@ function Planning() {
           </div>
         </div>
 
+        <div className="mt-4 inline-flex rounded-lg border border-border bg-surface p-0.5 shadow-sm">
+          {(["lijst", "kalender"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${
+                view === v ? "bg-brand text-white" : "text-muted hover:text-foreground"
+              }`}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
+
         {loadError && (
           <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600">
             {loadError}
           </p>
         )}
 
+        {/* Concepten */}
+        {drafts.length > 0 && (
+          <section className="mt-8">
+            <h3 className="text-lg font-semibold">
+              Concepten <span className="text-sm font-normal text-muted">({drafts.length})</span>
+            </h3>
+            <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              {drafts.map((d) => (
+                <div key={d.id} className="card flex items-center gap-3 p-3">
+                  <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-surface-2">
+                    {d.media[0]?.type === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={d.media[0].url} alt="" className="h-full w-full object-cover" />
+                    ) : d.media[0] ? (
+                      <video src={d.media[0].url} className="h-full w-full object-cover" muted />
+                    ) : (
+                      <span className="flex h-full items-center justify-center text-lg text-muted">✎</span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{d.subject || "(zonder onderwerp)"}</p>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      {accounts.find((a) => a.id === d.accountId)?.name || "account"} · bewerkt{" "}
+                      {fmtDateTime(d.updatedAt)}
+                      {d.media.length > 1 ? ` · carrousel ${d.media.length} foto's` : ""}
+                    </p>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      {d.channels.map((c) => (
+                        <PlatformBadge key={c} id={c} />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <Link
+                      href={`/?draft=${d.id}&account=${d.accountId}`}
+                      className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand/90"
+                    >
+                      Openen
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm("Concept verwijderen?")) return;
+                        await postJson(`/api/drafts?id=${d.id}`, undefined, "DELETE").catch(() => {});
+                        setDrafts((list) => list.filter((x) => x.id !== d.id));
+                      }}
+                      className="text-[11px] text-muted hover:text-red-600"
+                    >
+                      Verwijderen
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Kalender */}
+        {view === "kalender" && (
+          <section className="mt-8">
+            <Calendar
+              posts={[...queue, ...past]}
+              timeOf={(p) => (p.status === "pending" || p.status === "processing" ? p.scheduledFor : historyTime(p))}
+              channelsOf={channelsOf}
+              onOpen={(p) => {
+                setView("lijst");
+                if (p.status === "pending") setEditing(p.id);
+              }}
+            />
+          </section>
+        )}
+
         {/* Wachtrij */}
-        {(chip === "alles" || chip === "gepland") && (
+        {view === "lijst" && (chip === "alles" || chip === "gepland") && (
           <section className="mt-8">
             <h3 className="text-lg font-semibold">Wachtrij</h3>
             {!loaded ? (
@@ -464,7 +569,7 @@ function Planning() {
         )}
 
         {/* Geschiedenis */}
-        {chip !== "gepland" || past.length > 0 ? (
+        {view === "lijst" && (chip !== "gepland" || past.length > 0) ? (
           <section className="mt-10">
             <h3 className="text-lg font-semibold">Geschiedenis</h3>
             {!loaded ? (

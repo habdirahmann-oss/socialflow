@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { del } from "@vercel/blob";
 import {
@@ -16,8 +16,12 @@ import { normalizeTargets, countTargets } from "@/lib/targets";
 import { accountExists } from "@/lib/accounts";
 import { requireAuth } from "@/lib/auth";
 import { postView, parseStatusFilter, parseCaptions } from "@/lib/post-view";
+import { runDuePosts } from "@/lib/scheduler-run";
+import { enqueueCronAt } from "@/lib/qstash";
 
 export const runtime = "nodejs";
+// Na het antwoord kan een achterstallige post nog verstuurd worden (zie GET).
+export const maxDuration = 300;
 
 interface ScheduleBody {
   id?: unknown;
@@ -25,7 +29,7 @@ interface ScheduleBody {
   accountName?: unknown;
   scheduledFor?: unknown;
   /** Bij voorkeur { url, type } (directe upload); { dataUrl, type } blijft als fallback. */
-  media?: MediaInput | null;
+  media?: MediaInput | MediaInput[] | null;
   subject?: unknown;
   targets?: unknown;
   captions?: unknown;
@@ -68,6 +72,9 @@ export async function GET(req: Request) {
     .filter((p) => !accountId || p.accountId === accountId)
     .filter((p) => !statuses || statuses.has(p.status))
     .sort((a, b) => a.scheduledFor - b.scheduledFor);
+  // Bij openen van de app: staat er iets klaar dat de cron nog niet verstuurde,
+  // dan na het antwoord meteen versturen.
+  after(() => runDuePosts({ onlyIfDue: true }).catch(() => {}));
   return NextResponse.json({ posts: posts.map(postView) });
 }
 
@@ -140,6 +147,7 @@ export async function POST(req: Request) {
     scheduledFor,
     mediaUrl,
     mediaType: media?.type,
+    ...(media?.urls ? { mediaUrls: media.urls } : {}),
     // Alleen foto's krijgen een thumb; video's toont de lijst als <video>.
     thumb: media?.type === "image" && /^https?:/.test(media.url) ? media.url : undefined,
     subject:
@@ -156,6 +164,7 @@ export async function POST(req: Request) {
   };
   try {
     const { post: saved, created } = await addScheduled(post);
+    if (created) await enqueueCronAt(saved.scheduledFor);
     return NextResponse.json({
       ok: true,
       id: saved.id,
@@ -245,6 +254,7 @@ export async function PATCH(req: Request) {
         { status: 409 },
       );
     }
+    if (patch.scheduledFor !== undefined) await enqueueCronAt(patch.scheduledFor);
     return NextResponse.json({ ok: true, post: postView(res.post) });
   } catch (e) {
     return NextResponse.json(

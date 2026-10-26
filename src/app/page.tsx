@@ -78,8 +78,21 @@ function fmtDuration(s: number): string {
 }
 
 /** Wat er bij bevestigen verstuurd wordt (vastgelegd bij het openen van de modal). */
+/** Extra carrousel-foto (slide 2 t/m 10); slide 1 is `media`. */
+interface SlideItem {
+  key: number;
+  previewUrl: string;
+  url: string | null;
+  name: string;
+  progress: number;
+  error: string | null;
+}
+
+/** Max. aantal foto's in een carrousel (Instagram-limiet). */
+const MAX_SLIDES = 10;
+
 interface PostPayload {
-  media: { url: string; type: MediaKind } | null;
+  media: { url: string; type: MediaKind } | { url: string; type: MediaKind }[] | null;
   captions: Partial<Record<PlatformId, PlatformCaption>>;
   subject: string;
 }
@@ -240,6 +253,13 @@ export default function Page() {
           [fromUrl, stored].find((id) => id && list.some((a) => a.id === id)) ||
           list[0]?.id;
         if (pick) selectAccount(pick, list);
+        let draftParam: string | null = null;
+        try {
+          draftParam = new URLSearchParams(window.location.search).get("draft");
+        } catch {
+          draftParam = null;
+        }
+        if (draftParam) void loadDraft(draftParam, list);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -351,7 +371,7 @@ export default function Page() {
       });
   };
 
-  const onFiles = async (files: FileList | null) => {
+  const onFiles = async (files: FileList | File[] | null) => {
     const file = files?.[0];
     if (!file) return;
     const seq = ++pickSeq.current;
@@ -396,10 +416,189 @@ export default function Page() {
     releaseMedia();
     mediaKindRef.current = undefined;
     setMedia(null);
+    clearSlides();
   };
 
-  const mediaUploading = Boolean(media && !media.url && !media.error);
-  const mediaFailed = Boolean(media?.error);
+  /* ---------------- Carrousel (extra foto's) ---------------- */
+  const [slides, setSlides] = useState<SlideItem[]>([]);
+  const slideSeq = useRef(0);
+  const slidePrepared = useRef(new Map<number, PreparedMedia>());
+
+  const patchSlide = (key: number, patch: Partial<SlideItem>) =>
+    setSlides((list) => list.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+
+  const uploadSlide = (key: number) => {
+    const prepared = slidePrepared.current.get(key);
+    if (!prepared) return;
+    patchSlide(key, { progress: 0, error: null, url: null });
+    uploadMedia(prepared, (pct) => patchSlide(key, { progress: pct }), new AbortController().signal)
+      .then((url) => patchSlide(key, { url, progress: 100 }))
+      .catch((e) => patchSlide(key, { error: errText(e, "Upload mislukt") }));
+  };
+
+  /** Voegt foto's toe als slide 2, 3, … (alleen bij een foto als eerste slide). */
+  const addSlides = async (files: File[]) => {
+    for (const file of files) {
+      let prepared: PreparedMedia;
+      try {
+        prepared = await prepareMedia(file);
+      } catch (e) {
+        showToast(errText(e, "Bestand niet bruikbaar"));
+        continue;
+      }
+      if (prepared.type !== "image") {
+        URL.revokeObjectURL(prepared.previewUrl);
+        showToast("Een carrousel bestaat alleen uit foto's");
+        continue;
+      }
+      const key = ++slideSeq.current;
+      slidePrepared.current.set(key, prepared);
+      setSlides((list) => [
+        ...list,
+        { key, previewUrl: prepared.previewUrl, url: null, name: file.name, progress: 0, error: null },
+      ]);
+      uploadSlide(key);
+    }
+  };
+
+  const removeSlide = (key: number) => {
+    const prepared = slidePrepared.current.get(key);
+    if (prepared) URL.revokeObjectURL(prepared.previewUrl);
+    slidePrepared.current.delete(key);
+    setSlides((list) => list.filter((x) => x.key !== key));
+  };
+
+  /** Slide een plek naar links/rechts (slide 1 blijft de hoofdfoto). */
+  const moveSlide = (key: number, dir: -1 | 1) =>
+    setSlides((list) => {
+      const i = list.findIndex((x) => x.key === key);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= list.length) return list;
+      const next = [...list];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+
+  function clearSlides() {
+    for (const p of slidePrepared.current.values()) URL.revokeObjectURL(p.previewUrl);
+    slidePrepared.current.clear();
+    setSlides([]);
+  }
+
+  /* ---------------- Concepten ---------------- */
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+
+  /** Huidige post bewaren als concept (media moet al geüpload zijn). */
+  const saveDraft = async () => {
+    if (!accountIdRef.current) return;
+    if (mediaUploading) return showToast("Wacht tot de upload klaar is");
+    setSavingDraft(true);
+    try {
+      const mediaList = [
+        ...(media?.url ? [{ url: media.url, type: media.type, name: media.name }] : []),
+        ...(media?.type === "image"
+          ? slides.filter((x) => x.url).map((x) => ({ url: x.url!, type: "image" as const, name: x.name }))
+          : []),
+      ];
+      const data = await postJson<{ ok?: boolean; draft?: { id: string }; error?: string }>(
+        "/api/drafts",
+        {
+          id: draftId ?? undefined,
+          accountId: accountIdRef.current,
+          subject,
+          tone,
+          media: mediaList,
+          captions: buildCaptions(),
+          channels: Array.from(selectedRef.current),
+        },
+      );
+      if (data.draft) setDraftId(data.draft.id);
+      showToast(data.ok ? "Concept opgeslagen. Je vindt het terug in Planning." : data.error || "Opslaan mislukt");
+    } catch (e) {
+      showToast(`Opslaan mislukt: ${errText(e)}`);
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  /** Concept openen (via /?draft=<id>): account, media, tekst en kanalen terugzetten. */
+  const loadDraft = async (id: string, list: AccountInfo[]) => {
+    try {
+      const { draft: d } = await postJson<{
+        draft?: {
+          id: string;
+          accountId: string;
+          subject: string;
+          tone?: string;
+          media: { url: string; type: MediaKind; name?: string }[];
+          captions: Partial<Record<PlatformId, PlatformCaption>>;
+          channels: PlatformId[];
+        };
+      }>(`/api/drafts?id=${encodeURIComponent(id)}`, undefined, "GET");
+      if (!d) return;
+      if (list.some((a) => a.id === d.accountId)) selectAccount(d.accountId, list);
+      const [first, ...rest] = d.media;
+      if (first) {
+        mediaKindRef.current = first.type;
+        setMedia({
+          previewUrl: first.url,
+          url: first.url,
+          type: first.type,
+          mime: first.type === "image" ? "image/jpeg" : "video/mp4",
+          name: first.name || (first.type === "image" ? "foto.jpg" : "video.mp4"),
+          progress: 100,
+          error: null,
+        });
+        setSlides(
+          rest.map((m) => ({
+            key: ++slideSeq.current,
+            previewUrl: m.url,
+            url: m.url,
+            name: m.name || "foto.jpg",
+            progress: 100,
+            error: null,
+          })),
+        );
+      }
+      const acc = list.find((a) => a.id === d.accountId);
+      commitSelected(new Set(d.channels.filter((p) => isConnected(acc, p))));
+      setSubject(d.subject);
+      if (d.tone) setTone(d.tone);
+      setCaptions(d.captions);
+      setDraftId(d.id);
+      showToast("Concept geopend");
+    } catch (e) {
+      showToast(`Concept openen mislukt: ${errText(e)}`);
+    }
+  };
+
+  /** Na echt posten of inplannen is het concept klaar: weggooien. */
+  const finishDraft = () => {
+    if (!draftId) return;
+    void postJson(`/api/drafts?id=${encodeURIComponent(draftId)}`, undefined, "DELETE").catch(() => {});
+    setDraftId(null);
+  };
+
+  /** Bestandskeuze: 1 bestand vervangt de media; meerdere foto's = carrousel. */
+  const onPick = (files: FileList | null) => {
+    const list = Array.from(files || []);
+    if (!list.length) return;
+    if (list.length > MAX_SLIDES) showToast(`Max. ${MAX_SLIDES} foto's per carrousel`);
+    const [first, ...rest] = list.slice(0, MAX_SLIDES);
+    clearSlides();
+    void onFiles([first]);
+    if (!rest.length) return;
+    if (first.type.startsWith("video/")) {
+      showToast("Een carrousel bestaat alleen uit foto's: alleen de video is gebruikt");
+      return;
+    }
+    void addSlides(rest);
+  };
+
+  const mediaUploading =
+    Boolean(media && !media.url && !media.error) || slides.some((x) => !x.url && !x.error);
+  const mediaFailed = Boolean(media?.error) || slides.some((x) => x.error);
   const mediaKind = media?.type;
 
   /* ---------------- Platforms ---------------- */
@@ -580,8 +779,12 @@ export default function Page() {
     return out;
   };
   // Alleen de publieke URL gaat mee (de upload is al klaar) → kleine JSON-body.
-  const mediaPayload = (): PostPayload["media"] =>
-    media?.url ? { url: media.url, type: media.type } : null;
+  const mediaPayload = (): PostPayload["media"] => {
+    if (!media?.url) return null;
+    const first = { url: media.url, type: media.type };
+    const extra = slides.filter((x) => x.url).map((x) => ({ url: x.url!, type: "image" as const }));
+    return media.type === "image" && extra.length ? [first, ...extra] : first;
+  };
 
   /* ---------------- Bevestigingsmodal + automatische dry-run ---------------- */
   const payloadRef = useRef<PostPayload | null>(null);
@@ -679,8 +882,9 @@ export default function Page() {
         });
         if (data.ok) {
           setModal(null);
+          finishDraft();
           showToast(
-            `Ingepland voor ${formatWhen(st.scheduledFor!)} — wordt meestal binnen ~5–15 minuten na dat tijdstip geplaatst`,
+            `Ingepland voor ${formatWhen(st.scheduledFor!)}. Je ziet hem in Planning.`,
             5000,
           );
         } else {
@@ -727,6 +931,7 @@ export default function Page() {
       };
     }
     setPublishing(false);
+    if (panel.results.some((r) => r.ok)) finishDraft();
     setModal(null);
     setResult(panel);
     // Echte posts staan server-side in de geschiedenis (ook bij een time-out).
@@ -762,6 +967,7 @@ export default function Page() {
 
   const newPost = () => {
     setTtDraft(EMPTY_TIKTOK_DRAFT);
+    setDraftId(null);
     removeMedia();
     setCaptions({});
     setEdited(new Set());
@@ -878,7 +1084,7 @@ export default function Page() {
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
-                  onFiles(e.dataTransfer.files);
+                  onPick(e.dataTransfer.files);
                 }}
                 className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-surface-2/40 px-4 py-8 text-center transition hover:border-brand hover:bg-surface-2"
               >
@@ -886,18 +1092,19 @@ export default function Page() {
                 <p className="text-sm font-medium">
                   {media
                     ? "Sleep een ander bestand hierheen om te vervangen"
-                    : "Sleep een foto of video hierheen"}
+                    : "Sleep een foto, video of meerdere foto's hierheen"}
                 </p>
                 <p className="mt-1 text-xs text-muted">
-                  of klik om te kiezen · JPG, PNG, MP4 of MOV (max 500 MB)
+                  of klik om te kiezen · meerdere foto&apos;s = carrousel (max {MAX_SLIDES})
                 </p>
                 <input
                   ref={fileRef}
                   type="file"
                   accept={ACCEPT}
+                  multiple
                   hidden
                   onChange={(e) => {
-                    onFiles(e.target.files);
+                    onPick(e.target.files);
                     // zelfde bestand opnieuw kiezen moet ook werken
                     e.target.value = "";
                   }}
@@ -965,6 +1172,111 @@ export default function Page() {
                           />
                         </div>
                       </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {media?.type === "image" && (
+                <div className="mt-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-medium">
+                      Carrousel{" "}
+                      <span className="font-normal text-muted">
+                        {slides.length ? `${slides.length + 1} foto's` : "voeg meer foto's toe"}
+                      </span>
+                    </p>
+                    {slides.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={clearSlides}
+                        className="text-[11px] text-muted hover:text-red-600"
+                      >
+                        Alleen eerste foto houden
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <div className="relative h-16 w-16 overflow-hidden rounded-lg border-2 border-brand">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={media.previewUrl} alt="" className="h-full w-full object-cover" />
+                      <span className="absolute left-1 top-1 rounded bg-brand px-1 text-[9px] font-semibold text-white">
+                        1
+                      </span>
+                    </div>
+                    {slides.map((sl, i) => (
+                      <div
+                        key={sl.key}
+                        className="group relative h-16 w-16 overflow-hidden rounded-lg border border-border bg-surface-2"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={sl.previewUrl} alt={sl.name} className="h-full w-full object-cover" />
+                        <span className="absolute left-1 top-1 rounded bg-white/90 px-1 text-[9px] font-semibold text-foreground">
+                          {i + 2}
+                        </span>
+                        {!sl.url && !sl.error && (
+                          <span className="absolute inset-x-0 bottom-0 h-1 bg-surface-2">
+                            <span
+                              className="block h-full bg-brand transition-[width]"
+                              style={{ width: `${sl.progress}%` }}
+                            />
+                          </span>
+                        )}
+                        {sl.error && (
+                          <button
+                            type="button"
+                            onClick={() => uploadSlide(sl.key)}
+                            title={sl.error}
+                            className="absolute inset-0 flex items-center justify-center bg-red-600/70 text-[10px] font-semibold text-white"
+                          >
+                            Opnieuw
+                          </button>
+                        )}
+                        <div className="absolute inset-x-0 bottom-0 hidden justify-between bg-black/50 px-0.5 group-hover:flex">
+                          <button
+                            type="button"
+                            onClick={() => moveSlide(sl.key, -1)}
+                            className="px-1 text-[11px] text-white"
+                            aria-label="Naar links"
+                          >
+                            ‹
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeSlide(sl.key)}
+                            className="px-1 text-[11px] text-white"
+                            aria-label="Verwijderen"
+                          >
+                            ✕
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveSlide(sl.key, 1)}
+                            className="px-1 text-[11px] text-white"
+                            aria-label="Naar rechts"
+                          >
+                            ›
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {slides.length + 1 < MAX_SLIDES && (
+                      <label className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-border text-xl text-muted transition hover:border-brand hover:text-brand">
+                        +
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/heic"
+                          multiple
+                          hidden
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files || []).slice(
+                              0,
+                              MAX_SLIDES - 1 - slides.length,
+                            );
+                            void addSlides(files);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
                     )}
                   </div>
                 </div>
@@ -1313,7 +1625,15 @@ export default function Page() {
                   )}
 
                   <div className="flex items-center justify-between gap-3">
-                    <p className="min-w-0 text-xs text-muted">
+                    <button
+                      type="button"
+                      onClick={() => void saveDraft()}
+                      disabled={savingDraft || mediaUploading || (!media && !subject.trim() && !hasCaptions)}
+                      className="shrink-0 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-medium shadow-sm transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {savingDraft ? "Opslaan…" : draftId ? "Concept bijwerken" : "Opslaan als concept"}
+                    </button>
+                    <p className="hidden min-w-0 text-xs text-muted xl:block">
                       Account:{" "}
                       <span className="font-semibold text-foreground">
                         {currentAccount?.name ?? "—"}

@@ -22,6 +22,8 @@ export interface ScheduledPost {
   accountName: string;
   scheduledFor: number; // epoch ms
   mediaUrl?: string; // al publiek (Blob)
+  /** Carrousel: alle foto-URL's op volgorde (mediaUrl = de eerste). */
+  mediaUrls?: string[];
   mediaType?: MediaKind;
   thumb?: string; // kleine preview-url
   subject: string;
@@ -521,6 +523,7 @@ export async function processPost(
       out = await publishForAccount({
         accountId: post.accountId,
         mediaUrl: post.mediaUrl,
+        mediaUrls: post.mediaUrls,
         mediaType: post.mediaType,
         targets,
         captions: post.captions,

@@ -174,6 +174,7 @@ async function publishRemaining(
       accountId: e.accountId,
       mediaUrl: e.mediaUrl,
       mediaType: e.mediaType,
+      mediaUrls: e.mediaUrls,
       targets,
       captions: e.captions,
       dryRun: e.dryRun,
@@ -235,6 +236,7 @@ export async function publishDirectWithHistory(
     scheduledFor: now,
     mediaUrl: input.mediaUrl,
     mediaType: input.mediaType,
+    ...(input.mediaUrls ? { mediaUrls: input.mediaUrls } : {}),
     thumb:
       input.mediaType === "image" && /^https?:/.test(input.mediaUrl || "")
         ? input.mediaUrl
