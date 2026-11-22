@@ -279,8 +279,13 @@ function Planning() {
   const accountName = (p: PostView) =>
     accounts.find((a) => a.id === p.accountId)?.name || p.accountName || "account";
 
+  // Alleen waarschuwen als er echt een post blijft liggen: met QStash draait de
+  // planner alleen rond geplande tijdstippen, dus een oude 'laatste run' zegt niets.
+  const overdue = scheduled.some(
+    (p) => p.status === "pending" && now - p.scheduledFor > CRON_STALE_MS,
+  );
   const cronStale =
-    cronLoaded && (!cron?.ranAt || now - cron.ranAt > CRON_STALE_MS);
+    cronLoaded && overdue && (!cron?.ranAt || now - cron.ranAt > CRON_STALE_MS);
 
   /* ---------------- Acties ---------------- */
 
@@ -454,6 +459,16 @@ function Planning() {
         )}
 
         {/* Concepten */}
+        {drafts.length === 0 && (
+          <p className="mt-8 text-sm text-muted">
+            Nog geen concepten{accountId ? " voor deze klant" : ""}. Sla een post op met
+            &lsquo;Opslaan als concept&rsquo; in{" "}
+            <Link href={accountId ? `/?account=${encodeURIComponent(accountId)}` : "/"} className="text-brand underline-offset-2 hover:underline">
+              Nieuwe post
+            </Link>{" "}
+            om hem later af te maken.
+          </p>
+        )}
         {drafts.length > 0 && (
           <section className="mt-8">
             <h3 className="text-lg font-semibold">
