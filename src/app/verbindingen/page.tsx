@@ -46,7 +46,7 @@ function Inner() {
   const [ttbConfigured, setTtbConfigured] = useState(false);
   const [ytConfigured, setYtConfigured] = useState(false);
   const [appUrl, setAppUrl] = useState<string | null>(null);
-  const [maxAccounts, setMaxAccounts] = useState(10);
+  const [maxAccounts, setMaxAccounts] = useState(50);
   const [addError, setAddError] = useState<string | null>(null);
   /** Net aangemaakt account: scrollen + oplichten. */
   const [newId, setNewId] = useState<string | null>(null);

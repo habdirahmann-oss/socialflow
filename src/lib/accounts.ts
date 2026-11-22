@@ -10,8 +10,8 @@ export interface Account {
 const KEY = "accounts";
 
 /** Maximaal aantal klantaccounts (server-side afgedwongen). */
-export const MAX_ACCOUNTS = 10;
-export const MAX_ACCOUNTS_ERROR = "Maximaal 10 klantaccounts";
+export const MAX_ACCOUNTS = 50;
+export const MAX_ACCOUNTS_ERROR = `Maximaal ${MAX_ACCOUNTS} klantaccounts`;
 
 export class AccountLimitError extends Error {
   constructor() {

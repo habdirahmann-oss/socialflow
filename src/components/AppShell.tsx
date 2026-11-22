@@ -1,9 +1,20 @@
 import Link from "next/link";
 import LogoutLink from "./LogoutLink";
 
-type NavHref = "/" | "/planning" | "/verbindingen";
+type NavHref = "/klanten" | "/" | "/planning" | "/verbindingen";
 
 const ITEMS: { href: NavHref; label: string; icon: React.ReactNode }[] = [
+  {
+    href: "/klanten",
+    label: "Klanten",
+    icon: (
+      <>
+        <circle cx="9" cy="8" r="3.2" />
+        <path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5" strokeLinecap="round" />
+        <path d="M16 5.2a3 3 0 0 1 0 5.6M18 14.3c1.6.6 2.7 2.2 3 4.7" strokeLinecap="round" />
+      </>
+    ),
+  },
   {
     href: "/",
     label: "Nieuwe post",

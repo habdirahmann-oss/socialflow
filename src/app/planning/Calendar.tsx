@@ -39,12 +39,15 @@ export default function Calendar({
   posts,
   timeOf,
   channelsOf,
+  clientOf,
   onOpen,
 }: {
   posts: PostView[];
   /** Tijdstip om op te sorteren/plaatsen (gepland of geplaatst). */
   timeOf: (p: PostView) => number;
   channelsOf: (p: PostView) => string[];
+  /** Bij 'Alle klanten': naam van de klant per post (toont die in de tegel). */
+  clientOf?: (p: PostView) => string;
   onOpen: (p: PostView) => void;
 }) {
   const [cursor, setCursor] = useState(() => {
@@ -153,7 +156,7 @@ export default function Calendar({
                       key={`${p.source}-${p.id}`}
                       type="button"
                       onClick={() => onOpen(p)}
-                      title={p.subject}
+                      title={clientOf ? `${clientOf(p)}: ${p.subject}` : p.subject}
                       className={`flex w-full items-center gap-1 rounded-md border px-1 py-0.5 text-left text-[10px] leading-tight ${
                         STATUS_STYLE[p.status] || "border-border"
                       }`}
@@ -166,7 +169,10 @@ export default function Calendar({
                           <PlatformBadge key={c} id={c} />
                         ))}
                       </span>
-                      <span className="min-w-0 truncate">{p.subject}</span>
+                      <span className="min-w-0 truncate">
+                        {clientOf && <span className="font-semibold">{clientOf(p)} · </span>}
+                        {p.subject}
+                      </span>
                     </button>
                   );
                 })}

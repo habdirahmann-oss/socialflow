@@ -517,6 +517,7 @@ function Planning() {
               posts={[...queue, ...past]}
               timeOf={(p) => (p.status === "pending" || p.status === "processing" ? p.scheduledFor : historyTime(p))}
               channelsOf={channelsOf}
+              clientOf={accountId ? undefined : accountName}
               onOpen={(p) => {
                 setView("lijst");
                 if (p.status === "pending") setEditing(p.id);
