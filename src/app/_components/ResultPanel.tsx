@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   placementName,
   platformName,
@@ -18,6 +19,122 @@ export interface ResultPanelState {
   error?: string;
   retrying?: boolean;
   retryError?: string;
+  /** Alles om de TikTok-post zelf via TikTok Studio (laptop) te plaatsen. */
+  tiktokKit?: TikTokKit;
+}
+
+/** Media en tekst voor handmatig plaatsen via TikTok Studio op de laptop. */
+export interface TikTokKit {
+  mediaUrls: string[];
+  isPhoto: boolean;
+  title?: string;
+  text: string;
+}
+
+/** Blob-URL → eigen /api/media-URL (zelfde origin, dus downloaden mag). */
+function sameOriginMedia(u: string): string {
+  const m = /\/media\/([a-f0-9-]{36}\.[a-z0-9]+)(?:$|\?)/i.exec(u);
+  return m ? `/api/media/${m[1]}` : u;
+}
+
+async function downloadAll(urls: string[]) {
+  for (const [i, u] of urls.entries()) {
+    const res = await fetch(sameOriginMedia(u));
+    if (!res.ok) throw new Error(`Bestand ${i + 1} downloaden mislukt`);
+    const blob = await res.blob();
+    const ext = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `tiktok-${String(i + 1).padStart(2, "0")}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    // korte pauze, anders blokkeert de browser meerdere downloads
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+function TikTokLaptopKit({ kit }: { kit: TikTokKit }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const copy = async (what: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setDone(what);
+      setErr(null);
+    } catch {
+      setErr("Kopiëren lukte niet, selecteer de tekst zelf");
+    }
+  };
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-surface px-3 py-2.5 text-xs">
+      <p className="font-medium">💻 Niet op je telefoon? Plaats TikTok zelf via je laptop</p>
+      <ol className="mt-1.5 flex list-decimal flex-col gap-1.5 pl-4 text-muted">
+        <li>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr(null);
+              try {
+                await downloadAll(kit.mediaUrls);
+                setDone(kit.isPhoto ? "foto's" : "video");
+              } catch (e) {
+                setErr(e instanceof Error ? e.message : "Downloaden mislukt");
+              } finally {
+                setBusy(false);
+              }
+            }}
+            className="rounded-md border border-border px-2 py-0.5 text-foreground hover:border-brand disabled:opacity-50"
+          >
+            {busy
+              ? "Bezig…"
+              : kit.isPhoto
+                ? `Download ${kit.mediaUrls.length} foto's`
+                : "Download video"}
+          </button>
+        </li>
+        <li>
+          <a
+            href={`https://www.tiktok.com/tiktokstudio/upload?from=webapp${kit.isPhoto ? "&tab=photo" : ""}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-brand underline-offset-2 hover:underline"
+          >
+            Open TikTok Studio ↗
+          </a>{" "}
+          en sleep de {kit.isPhoto ? "foto's (op volgorde)" : "video"} erin
+        </li>
+        <li className="flex flex-wrap items-center gap-1.5">
+          {kit.title && (
+            <button
+              type="button"
+              onClick={() => copy("titel", kit.title!)}
+              className="rounded-md border border-border px-2 py-0.5 text-foreground hover:border-brand"
+            >
+              Kopieer titel
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => copy("beschrijving", kit.text)}
+            className="rounded-md border border-border px-2 py-0.5 text-foreground hover:border-brand"
+          >
+            Kopieer beschrijving
+          </button>
+          <span>en plak in TikTok Studio, dan Plaatsen</span>
+        </li>
+      </ol>
+      {done && <p className="mt-1.5 text-accent">✓ {done} klaar</p>}
+      {err && <p className="mt-1.5 text-red-600">{err}</p>}
+      <p className="mt-1.5 text-[11px] text-muted">
+        Doe je dit, negeer dan het concept in je TikTok-inbox, anders staat hij er twee keer op.
+      </p>
+    </div>
+  );
 }
 
 /** Blijvend resultaatpaneel na een echte post — blijft staan tot 'Nieuwe post'. */
@@ -110,6 +227,8 @@ export function ResultPanel({
           ))}
         </ul>
       )}
+
+      {state.tiktokKit && <TikTokLaptopKit kit={state.tiktokKit} />}
 
       {igPost?.url && (
         <div className="mt-3 rounded-lg border border-brand/40 bg-brand/10 px-3 py-2 text-xs">

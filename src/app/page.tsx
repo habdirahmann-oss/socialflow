@@ -39,6 +39,7 @@ import {
   targetList,
   targetsFromResults,
   type AccountInfo,
+  type ClientResult,
   type MediaItem,
   type PublishResponse,
 } from "./_components/composer-lib";
@@ -53,7 +54,7 @@ import {
 import AppShell from "@/components/AppShell";
 import { CaptionEditor, PhonePreview } from "./_components/previews";
 import { ConfirmModal, type ModalMode, type ModalState } from "./_components/ConfirmModal";
-import { ResultPanel, type ResultPanelState } from "./_components/ResultPanel";
+import { ResultPanel, type ResultPanelState, type TikTokKit } from "./_components/ResultPanel";
 import {
   EMPTY_TIKTOK_DRAFT,
   TikTokSettingsPanel,
@@ -86,6 +87,23 @@ interface SlideItem {
   name: string;
   progress: number;
   error: string | null;
+}
+
+/** TikTok kwam als concept in de inbox: geef media en tekst mee voor TikTok Studio. */
+function tiktokKitFor(results: ClientResult[], payload: PostPayload): TikTokKit | undefined {
+  const draft = results.some((r) => r.ok && r.platform === "tiktok" && /inbox/i.test(r.note || ""));
+  const cap = payload.captions?.tiktok;
+  if (!draft || !payload.media || !cap) return undefined;
+  const list = Array.isArray(payload.media) ? payload.media : [payload.media];
+  const mediaUrls = list.map((m) => m.url).filter((u): u is string => typeof u === "string");
+  if (!mediaUrls.length) return undefined;
+  const tags = (cap.hashtags || []).map((h) => `#${h.replace(/^#/, "")}`).join(" ");
+  return {
+    mediaUrls,
+    isPhoto: list[0]?.type === "image",
+    title: cap.title || undefined,
+    text: [cap.caption, tags].filter(Boolean).join("\n\n"),
+  };
 }
 
 /** Max. aantal foto's in een carrousel (Instagram-limiet). */
@@ -920,6 +938,7 @@ export default function Page() {
         results,
         dropped: data.dropped || [],
         error: results.length ? undefined : data.error || "Geen plaatsingen verstuurd",
+        tiktokKit: tiktokKitFor(results, payload),
       };
     } catch (e) {
       panel = {
